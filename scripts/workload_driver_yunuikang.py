@@ -55,7 +55,19 @@ def _parse_prefix_cache(metrics_text: str) -> Dict[str, float]:
     return {
         "queries": _sum("vllm:prefix_cache_queries_total"),
         "hits": _sum("vllm:prefix_cache_hits_total"),
+        "preemptions": _sum("vllm:num_preemptions_total"),
     }
+
+
+def _unique_filler(idx: int, ntok: int) -> str:
+    """A long, program-UNIQUE text block (~ntok tokens) placed after the shared
+    system prompt so it is NOT deduplicated by prefix caching -> forces distinct
+    per-program KV and lets us pressure total KV capacity."""
+    if ntok <= 0:
+        return ""
+    base = idx * 100003 + 7
+    body = " ".join(str((base + i) % 100000) for i in range(ntok))
+    return f"[DOC-{idx}] Reference material, read carefully: {body}\n\n"
 
 
 async def _fetch_metrics(client: httpx.AsyncClient, backend_urls: List[str]) -> Dict[str, Dict[str, float]]:
@@ -75,7 +87,8 @@ async def run_program(client: httpx.AsyncClient, args, idx: int, sem: asyncio.Se
         program_id = f"{args.run_id}:{idx}"
         messages = [
             {"role": "system", "content": SHARED_SYSTEM_PROMPT},
-            {"role": "user", "content": TURN_QUESTIONS[0] + " /no_think"},
+            {"role": "user", "content": _unique_filler(idx, args.ctx_tokens)
+             + TURN_QUESTIONS[0] + " /no_think"},
         ]
         prog_start = time.perf_counter()
         turn_latencies: List[float] = []
@@ -156,6 +169,7 @@ async def main_async(args) -> dict:
     hits = sum(m_after.get(u, {}).get("hits", 0) - m_before.get(u, {}).get("hits", 0) for u in backends)
     queries = sum(m_after.get(u, {}).get("queries", 0) - m_before.get(u, {}).get("queries", 0) for u in backends)
     hit_rate = (hits / queries) if queries else None
+    preemptions = sum(m_after.get(u, {}).get("preemptions", 0) - m_before.get(u, {}).get("preemptions", 0) for u in backends)
 
     summary = {
         "run_id": args.run_id,
@@ -165,6 +179,7 @@ async def main_async(args) -> dict:
         "turns": args.turns,
         "tool_sleep_s": args.tool_sleep,
         "max_tokens": args.max_tokens,
+        "ctx_tokens": args.ctx_tokens,
         "backends": backends,
         "completed": len(ok),
         "failed": len(fail),
@@ -178,6 +193,7 @@ async def main_async(args) -> dict:
         "prefix_cache_hits_delta": hits,
         "prefix_cache_queries_delta": queries,
         "prefix_cache_hit_rate": hit_rate,
+        "num_preemptions_delta": preemptions,
     }
     if fail:
         summary["sample_error"] = fail[0].get("error")
@@ -197,6 +213,8 @@ def main() -> None:
     ap.add_argument("--turns", type=int, default=4)
     ap.add_argument("--tool-sleep", type=float, default=0.5)
     ap.add_argument("--max-tokens", type=int, default=128)
+    ap.add_argument("--ctx-tokens", type=int, default=0,
+                    help="approx unique filler tokens per program (KV pressure)")
     ap.add_argument("--out", default="")
     ap.add_argument("--run-id", default="")
     args = ap.parse_args()

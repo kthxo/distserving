@@ -2,7 +2,8 @@
 
 > 작성: 강윤의 · 브랜치 `yunuikang/thunderagent` · 서버: mango1 (KAIST)
 > 최종 업데이트: 2026-07-02
-> 상태: **1차 재현 성공** (tr vs default, 2백엔드) — 심화 스래싱/그래프는 `TBD`.
+> 상태: **재현 성공 + 스래싱 심화 실험 성공** (tr vs default, 2백엔드, 그래프 포함).
+> 남은 것: 반복측정(에러바), cross-node/heterogeneous는 `TBD`.
 
 ---
 
@@ -174,23 +175,76 @@ query 델타(≈ 요청량 비율).
 
 ---
 
-## 9. 다음 할 일
+## 9. 심화 실험: KV 캐시 스래싱 강하게 유도 (보완 실험)
 
-1. **스래싱 심화 유도**: `--max-model-len`↑ + max_tokens↑ + 긴 시스템프롬프트로 한 백엔드 KV 용량
-   초과를 유발 → 재프리필/`num_preemptions` 급증과 tr의 pause/resume 이점을 더 뚜렷이.
-2. **그래프화**: concurrency축 throughput/p95-latency 곡선(tr vs default 오버레이) → 미팅 슬라이드.
-   (`results_tr2.jsonl`, `results_default2.jsonl` 사용.)
-3. **반복 측정**: 각 점 3회 반복해 분산/에러바 확인(현재 1회).
-4. **`num_preemptions`·`kv_cache_usage_perc` 시계열 수집**으로 스래싱 정량화.
-5. (후속) cross-node(mango1+mango3) 분산 검증 → 이후 **heterogeneous**(goguma6 5090 ↔ mango 4090).
+§8의 한계("명시적 스래싱 미유도")를 보완하기 위해, **프로그램마다 고유한 긴 컨텍스트**를
+주입해 두 4090의 KV 용량을 초과시키고 재프리필이 폭증하는 구간을 만들었다.
+
+**방법 (핵심)**: 공유 시스템 프롬프트는 prefix 캐시로 dedup되어 메모리를 안 늘리므로,
+각 프로그램 첫 user 메시지에 **프로그램별 고유 필러(~3000 토큰)** 를 넣어 **프로그램별 distinct
+KV** 를 크게 만들었다(`--ctx-tokens 3000`). 그러면 동시 프로그램 몇 개만으로 백엔드당 KV
+용량(36,992 토큰)을 초과 → 유휴(툴콜 중) 프로그램의 KV 블록이 eviction → 다음 턴에 재프리필.
+
+- 파라미터: `ctx_tokens=3000, turns=3, tool_sleep=0.5s, max_tokens=96`, 프로그램/런 = 48.
+- 실행: `CTX=3000 TURNS=3 SLEEP=0.5 MAXTOK=96 NPROG_MULT=2 NPROG_CAP=48 bash scripts/run_sweep_yunuikang.sh <tr|default> <out> 8 16 24 32 48`
+- 주: 여기서 스래싱은 "완료된 시퀀스의 prefix-cache 블록 eviction"이라 vLLM `num_preemptions`
+  는 0으로 잡힘 → **KV hit rate와 총 재프리필 토큰(split 합)** 이 스래싱의 실제 지표.
+
+### 결과 (2×4090, 유효)
+
+| C | tr hit | default hit | tr thru(p/s) | default thru | tr p95(s) | default p95(s) |
+|---|---|---|---|---|---|---|
+| 8  | 0.280 | 0.044 | 0.46 | 0.30 | 30.6 | 28.2 |
+| 16 | **0.673** | 0.024 | 0.49 | 0.30 | 60.8 | 53.9 |
+| 24 | **0.673** | 0.024 | 0.49 | 0.30 | 60.9 | 81.5 |
+| 32 | **0.673** | 0.024 | 0.49 | 0.30 | 79.8 | 106.1 |
+| 48 | **0.673** | 0.024 | 0.47 | 0.30 | 97.1 | **158.4** |
+
+**재프리필 총량(= 백엔드 query 토큰 합, 낮을수록 좋음)**: tr ≈ 2.0–2.5M/런 vs
+default ≈ 25M/런 → default가 **약 10배 더 재프리필**(스래싱). default의 split은 심하게
+불균형(≈16.6M/8.9M)이라 부하분산도 무너짐.
+
+### 그래프 (figures/)
+- `figures/thrash_hit_rate.png` — **핵심**: tr ~0.67 유지 vs default ~0.02 붕괴.
+- `figures/thrash_throughput.png` — tr ~0.49 vs default ~0.30 (tr +57%).
+- `figures/thrash_p95_latency.png` — 고부하에서 tr이 훨씬 낮음(C=48: 97s vs 158s).
+
+### 해석
+KV 용량을 초과시키자 두 라우터가 **명확히 갈림**:
+- **`default`**: 프로그램을 용량 고려 없이 밀어넣어 유휴 프로그램 KV가 계속 eviction →
+  hit rate **~0.02로 붕괴**, 매 턴 재프리필 폭증 → throughput 정체(0.30), latency는 부하에
+  따라 급격히 악화(C=48에서 158s).
+- **`tr`**: capacity-aware 스케줄링(용량 초과 시 pause/queue 후 resume)으로 활성 working set을
+  용량 안에 유지 → hit rate **~0.67 유지**, 재프리필 ~1/10, throughput +57%, latency도 완만.
+
+**→ 논문의 핵심 주장("program-aware 스케줄링이 KV 캐시 스래싱을 막아 hit rate·throughput을
+지킨다")을 우리 환경에서 정량적으로 재현.** 이번엔 §7(가벼운 워크로드)과 달리 hit rate가
+극적으로 갈리는 진짜 스래싱 구간을 확보.
+
+> 한계: (1) 각 점 1회 측정(반복/에러바 필요). (2) tr c=8의 hit(0.280)이 c≥16(0.673)보다 낮은데,
+> 저부하 소표본 측정 아티팩트로 보임 → 반복측정으로 확인. (3) 합성 필러라 실제 에이전트
+> 토큰 분포와는 다름.
+
+---
+
+## 10. 다음 할 일
+
+1. ~~스래싱 심화 유도~~ ✅ 완료 (§9) — 고유 컨텍스트로 KV 초과, hit rate 갈림 확인.
+2. ~~그래프화~~ ✅ 완료 (§9, `figures/thrash_*.png`).
+3. **반복 측정**: 각 점 3회 반복해 분산/에러바 확인(현재 1회). tr c=8 아티팩트 재확인.
+4. **`kv_cache_usage_perc` 시계열 수집**으로 스래싱 정량화(용량 초과 순간 시각화).
+5. **논문 정독**(계획서 STEP 1) — 논문 워크로드·지표와 우리 합성 워크로드 대조.
+6. (후속) cross-node(mango1+mango3) 분산 검증 → 이후 **heterogeneous**(goguma6 5090 ↔ mango 4090).
 
 ---
 
 ## 부록: 산출물 위치
-- 워크로드 드라이버: `scripts/workload_driver_yunuikang.py`
-- 스윕 러너: `scripts/run_sweep_yunuikang.sh`
+- 워크로드 드라이버: `scripts/workload_driver_yunuikang.py` (`--ctx-tokens`로 KV 압박)
+- 스윕 러너: `scripts/run_sweep_yunuikang.sh` (CTX/TURNS/SLEEP/MAXTOK 등 env로 조절)
+- 그래프 스크립트: `scripts/plot_results_yunuikang.py`
+- 그래프(PPT용): `figures/thrash_hit_rate.png`, `figures/thrash_throughput.png`, `figures/thrash_p95_latency.png`
 - 스모크 테스트: `scripts/smoke_test_yunuikang.py`
 - 버그 수정: `ThunderAgent/__init__.py` (app 지연 import)
-- 결과 JSON: `../scratch/results_tr2.jsonl`, `../scratch/results_default2.jsonl`
-- 분산 CSV: `../scratch/dist_tr.csv`, `../scratch/dist_default.csv`
+- 결과 JSON(가벼운 §7): `../scratch/results_tr2.jsonl`, `../scratch/results_default2.jsonl`
+- 결과 JSON(스래싱 §9): `../scratch/thrash_tr.jsonl`, `../scratch/thrash_default.jsonl`
 - 서버 로그: `../scratch/vllm_serve*.log`, `../scratch/thunderagent*.log`
