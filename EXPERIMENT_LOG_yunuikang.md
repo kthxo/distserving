@@ -227,7 +227,64 @@ KV 용량을 초과시키자 두 라우터가 **명확히 갈림**:
 
 ---
 
-## 10. 다음 할 일
+## 10. 워크로드 characterization (특성 분석)
+
+> 김태현 연구원 요청: tr vs default **비교**가 아니라 **워크로드 자체의 기본 특성**을 뽑는다.
+> 특성은 라우터와 무관하므로 **단일 vLLM 백엔드(포트 8000, GPU 1장)** 에 직접 측정.
+> 측정 config: `ctx=3000` 필러, `turns=4`, `tool_sleep=0.4s`, `max_tokens=256`.
+> 부하 하 분포/lifetime/KV는 **c=8**(48 프로그램), 순수 prefill/decode는 **c=1**(8 프로그램, 큐 오염 없음)로 측정.
+
+### 10-0. 측정 소스와 방법 (뽑을 수 있는 값 vs 근사)
+
+| 항목 | 소스 | 가능성 |
+|------|------|--------|
+| input/output 토큰 | 응답 `usage`(`prompt_tokens`/`completion_tokens`) | ✅ **정확 측정** |
+| task lifetime, turn 수 | 드라이버 클라이언트 타이머 | ✅ **정확 측정** |
+| tool 시간 | 우리가 넣은 `sleep` 값 | ✅ 정확(설계값) |
+| **prefill** | 스트리밍 **TTFT**(첫 토큰 도착) | ⚠️ **근사** — 큐 대기 포함 → c=1에서 측정 |
+| **decode** | `turn_latency − TTFT` | ⚠️ **근사** |
+| KV bytes/token, GPU 수용량 | Qwen3-8B config + vLLM 시작 로그 KV풀 | 🧮 config 기반 계산(토큰 수는 측정) |
+
+- vLLM은 **요청별** prefill/decode를 분리 제공하지 않음(/metrics 히스토그램은 집계값). 그래서 클라이언트 스트리밍 TTFT로 근사.
+- 계측: `workload_driver_yunuikang.py`에 `--stream`(TTFT 캡처, `stream_options.include_usage`) 과 `--trace-out`(turn별 JSONL) 추가.
+
+### 10-1. input / output 토큰 분포  → `figures/char_tokens.png`
+- **input(turn당)**: 평균 **14,558 토큰** (min 14,310 / max 14,762). ⚠️ `ctx=3000`은 "필러 단어 3000개"인데 5자리 숫자가 여러 토큰으로 쪼개져 **실제 ~14.5k 토큰**이 됨 → §9 스래싱 실험의 실제 turn 입력이 ~14.5k였음을 확인.
+- **output(turn당)**: 평균 **28.6 토큰** (8–47). `/no_think` + 짧은 질문이라 매우 짧음.
+- **output(프로그램당)**: 평균 **114 토큰** (4턴 합).
+
+### 10-2. task(프로그램) lifetime  → `figures/char_lifetime.png`
+- 프로그램 생존시간(첫 turn ~ release): 평균 **63.8s**, p50 64.6s, p95 68.7s (min 52.2 / max 70.8) — c=8 부하 기준.
+- turn 수: **4 (고정 파라미터)** → 분포는 단일값.
+
+### 10-3. turn 단계별 시간 분해 (prefill/decode/tool)  → `figures/char_turn_breakdown.png`
+c=1(순수) 기준, turn index별 평균:
+| turn | prefill(~TTFT) | decode | tool | 합 |
+|------|------|------|------|------|
+| 0 | **≈1.82s** (cold, 14.4k 토큰 full prefill) | ≈0.8s | 0.4s | 3.0s |
+| 1 | **≈0.13s** (prefix 캐시 히트) | ≈0.7s | 0.4s | 1.2s |
+| 2 | ≈0.13s | ≈0.4s | 0.4s | 0.9s |
+| 3 | ≈0.13s | ≈0.2s | 0.0s(마지막) | 0.3s |
+- **핵심**: turn 0만 14.4k 토큰 전체를 prefill(≈1.8s), turn 1–3은 **자기 프로그램의 prefix를 재사용**해 새 토큰(~60개)만 prefill → TTFT가 **~14배** 짧아짐(1.82s→0.13s). **KV locality가 왜 중요한지**를 워크로드 수준에서 실측으로 보여줌.
+- decode: ~28토큰에 ~0.5s → **≈18 ms/token** (4090 기준 타당).
+- TTFT 통계(c=1): mean 0.549 / median 0.133 (median=warm turn, 꼬리=cold turn0).
+
+### 10-4. KV 캐시 필요량 & GPU 수용량  → `figures/char_kv.png`
+- **KV bytes/token = 2(K,V) × 36 layers × 8 KV heads × 128 head_dim × 2B(bf16) = 147,456 B = 144 KiB** (config.json 실측).
+- **turn별 누적**: 시퀀스 길이(=KV 발자국)가 turn마다 증가 → 프로그램 **peak ≈ 14,668 토큰 ≈ 2.01 GiB**.
+- **4090 KV 풀(실측, vLLM 시작 로그)**: `Available KV cache memory: 6.03 GiB`, `GPU KV cache size: 43,888 tokens`, `Maximum concurrency ... 1.34x`.
+  - 교차검증: 43,888 × 144 KiB = **정확히 6.03 GiB** → KV/token 계산 확인 ✅
+- **→ 4090 한 장에 동시 적재 가능 프로그램 = 43,888 / 14,668 ≈ 2.99 ≈ 3개.**
+  - 즉 §9에서 c=48로 밀어넣으면 용량의 **~16배 초과** → 필연적 스래싱. characterization이 §9의 스래싱을 **정량적으로 설명**함.
+- **5090(32GB) 추정(ESTIMATE, 미측정)**: 비-KV(가중치+활성+오버헤드) 고정 가정 시 KV 풀 ≈ **13.39 GiB ≈ 97,481 토큰 → ~6.6개 프로그램**. → hetero에서 5090이 4090보다 ~2.2배 더 담지만, 그래도 절대량은 작음(둘 다 쉽게 초과) → **작은 GPU가 먼저 스래싱**한다는 §해석과 직결.
+
+### 10-5. 시사점 (다음 단계 연결)
+- 이 워크로드는 **input-heavy**(입력 14.5k ≫ 출력 28): 비용은 거의 prefill/KV에 있고, KV locality가 결정적.
+- 프로그램당 2 GiB, 4090엔 3개뿐 → homogeneous에서도 concurrency가 조금만 올라도 KV 초과. hetero에선 **GPU별 수용량(4090≈3, 5090≈6.6)이 다르므로**, 균등 분배(tr의 현재 가정)로는 작은 GPU가 먼저 터진다 → **용량 비례 라우팅** 필요성의 실측 근거.
+
+---
+
+## 11. 다음 할 일
 
 1. ~~스래싱 심화 유도~~ ✅ 완료 (§9) — 고유 컨텍스트로 KV 초과, hit rate 갈림 확인.
 2. ~~그래프화~~ ✅ 완료 (§9, `figures/thrash_*.png`).
@@ -241,8 +298,10 @@ KV 용량을 초과시키자 두 라우터가 **명확히 갈림**:
 ## 부록: 산출물 위치
 - 워크로드 드라이버: `scripts/workload_driver_yunuikang.py` (`--ctx-tokens`로 KV 압박)
 - 스윕 러너: `scripts/run_sweep_yunuikang.sh` (CTX/TURNS/SLEEP/MAXTOK 등 env로 조절)
-- 그래프 스크립트: `scripts/plot_results_yunuikang.py`
+- 그래프 스크립트: `scripts/plot_results_yunuikang.py` (tr vs default), `scripts/plot_char_yunuikang.py` (characterization)
 - 그래프(PPT용): `figures/thrash_hit_rate.png`, `figures/thrash_throughput.png`, `figures/thrash_p95_latency.png`
+- characterization 그래프(§10): `figures/char_tokens.png`, `figures/char_lifetime.png`, `figures/char_turn_breakdown.png`, `figures/char_kv.png`
+- characterization 원시데이터: `../scratch/char_trace.jsonl`(turn별, c=8), `../scratch/char_trace_c1.jsonl`(c=1), `../scratch/char_summary.jsonl`
 - 스모크 테스트: `scripts/smoke_test_yunuikang.py`
 - 버그 수정: `ThunderAgent/__init__.py` (app 지연 import)
 - 결과 JSON(가벼운 §7): `../scratch/results_tr2.jsonl`, `../scratch/results_default2.jsonl`

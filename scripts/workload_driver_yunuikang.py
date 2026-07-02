@@ -81,8 +81,53 @@ async def _fetch_metrics(client: httpx.AsyncClient, backend_urls: List[str]) -> 
     return out
 
 
+async def _chat_once(client: httpx.AsyncClient, args, payload: dict):
+    """One chat completion. Returns (content, usage, ttft_s, turn_latency_s).
+
+    Non-streaming: ttft_s is None (can't observe first-token time).
+    Streaming (--stream): capture time-to-first-token client-side and request
+    usage in the final chunk via stream_options.include_usage."""
+    t0 = time.perf_counter()
+    if not args.stream:
+        r = await client.post(f"{args.base_url}/v1/chat/completions", json=payload, timeout=900)
+        r.raise_for_status()
+        data = r.json()
+        turn_latency = time.perf_counter() - t0
+        content = data["choices"][0]["message"]["content"] or ""
+        return content, (data.get("usage") or {}), None, turn_latency
+
+    payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    content_parts: List[str] = []
+    usage: Dict[str, float] = {}
+    ttft: Optional[float] = None
+    async with client.stream("POST", f"{args.base_url}/v1/chat/completions",
+                             json=payload, timeout=900) as r:
+        r.raise_for_status()
+        async for raw in r.aiter_lines():
+            if not raw or not raw.startswith("data:"):
+                continue
+            chunk = raw[len("data:"):].strip()
+            if chunk == "[DONE]":
+                break
+            try:
+                obj = json.loads(chunk)
+            except json.JSONDecodeError:
+                continue
+            choices = obj.get("choices") or []
+            if choices:
+                delta = (choices[0].get("delta") or {}).get("content")
+                if delta:
+                    if ttft is None:            # first token -> TTFT (~prefill)
+                        ttft = time.perf_counter() - t0
+                    content_parts.append(delta)
+            if obj.get("usage"):
+                usage = obj["usage"]
+    turn_latency = time.perf_counter() - t0
+    return "".join(content_parts), usage, ttft, turn_latency
+
+
 async def run_program(client: httpx.AsyncClient, args, idx: int, sem: asyncio.Semaphore,
-                      results: List[dict]) -> None:
+                      results: List[dict], trace: List[dict]) -> None:
     async with sem:
         program_id = f"{args.run_id}:{idx}"
         messages = [
@@ -93,6 +138,8 @@ async def run_program(client: httpx.AsyncClient, args, idx: int, sem: asyncio.Se
         prog_start = time.perf_counter()
         turn_latencies: List[float] = []
         completion_tokens = 0
+        turns_done = 0
+        peak_seq_tokens = 0          # max (prompt+completion) reached -> KV peak
         ok = True
         for t in range(args.turns):
             payload = {
@@ -102,20 +149,28 @@ async def run_program(client: httpx.AsyncClient, args, idx: int, sem: asyncio.Se
                 "temperature": 0,
                 "program_id": program_id,
             }
-            t0 = time.perf_counter()
             try:
-                r = await client.post(f"{args.base_url}/v1/chat/completions",
-                                      json=payload, timeout=900)
-                r.raise_for_status()
-                data = r.json()
+                msg, usage, ttft, turn_latency = await _chat_once(client, args, payload)
             except Exception as e:
                 ok = False
                 results.append({"program_id": program_id, "ok": False, "error": str(e)[:200]})
                 break
-            turn_latencies.append(time.perf_counter() - t0)
-            msg = data["choices"][0]["message"]["content"] or ""
-            usage = data.get("usage") or {}
-            completion_tokens += int(usage.get("completion_tokens") or 0)
+            turn_latencies.append(turn_latency)
+            turns_done += 1
+            ptok = int(usage.get("prompt_tokens") or 0)
+            ctok = int(usage.get("completion_tokens") or 0)
+            completion_tokens += ctok
+            seq_tokens = ptok + ctok          # sequence length after this turn == KV footprint
+            peak_seq_tokens = max(peak_seq_tokens, seq_tokens)
+            decode = (turn_latency - ttft) if (ttft is not None) else None
+            trace.append({
+                "program_id": program_id, "turn": t,
+                "prompt_tokens": ptok, "completion_tokens": ctok,
+                "seq_tokens": seq_tokens,
+                "turn_latency_s": turn_latency,
+                "ttft_s": ttft, "decode_s": decode,
+                "tool_sleep_s": (args.tool_sleep if t < args.turns - 1 else 0.0),
+            })
             # append assistant reply + a synthetic tool result, then next turn
             messages.append({"role": "assistant", "content": msg})
             if t < args.turns - 1:
@@ -136,6 +191,8 @@ async def run_program(client: httpx.AsyncClient, args, idx: int, sem: asyncio.Se
                 "program_latency_s": prog_latency,
                 "turn_latencies_s": turn_latencies,
                 "completion_tokens": completion_tokens,
+                "turns_done": turns_done,
+                "peak_seq_tokens": peak_seq_tokens,
             })
 
 
@@ -146,9 +203,10 @@ async def main_async(args) -> dict:
         m_before = await _fetch_metrics(client, backends)
         sem = asyncio.Semaphore(args.concurrency)
         results: List[dict] = []
+        trace: List[dict] = []
         wall0 = time.perf_counter()
         await asyncio.gather(*[
-            run_program(client, args, i, sem, results)
+            run_program(client, args, i, sem, results, trace)
             for i in range(args.num_programs)
         ])
         wall = time.perf_counter() - wall0
@@ -197,6 +255,45 @@ async def main_async(args) -> dict:
     }
     if fail:
         summary["sample_error"] = fail[0].get("error")
+
+    # --- workload characterization aggregates (from per-turn trace) ---
+    if trace:
+        def _stats(vals):
+            vals = [v for v in vals if v is not None]
+            if not vals:
+                return None
+            s = sorted(vals)
+            return {
+                "n": len(s), "min": s[0], "max": s[-1],
+                "mean": statistics.mean(s), "median": statistics.median(s),
+                "p95": s[min(len(s) - 1, int(round(0.95 * (len(s) - 1))))],
+            }
+        summary["char"] = {
+            "prompt_tokens": _stats([r["prompt_tokens"] for r in trace]),
+            "completion_tokens": _stats([r["completion_tokens"] for r in trace]),
+            "seq_tokens": _stats([r["seq_tokens"] for r in trace]),
+            "ttft_s": _stats([r["ttft_s"] for r in trace]),
+            "decode_s": _stats([r["decode_s"] for r in trace]),
+            "turn_latency_s": _stats([r["turn_latency_s"] for r in trace]),
+            "program_lifetime_s": _stats([r["program_latency_s"] for r in ok]),
+            "peak_seq_tokens": _stats([r["peak_seq_tokens"] for r in ok]),
+            "turns_done": _stats([r["turns_done"] for r in ok]),
+        }
+    if args.trace_out and trace:
+        with open(args.trace_out, "w", encoding="utf-8") as f:
+            for r in trace:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        # sibling per-program file (lifetime / turns / peak KV footprint)
+        prog_path = args.trace_out.rsplit(".", 1)[0] + ".prog.jsonl"
+        with open(prog_path, "w", encoding="utf-8") as f:
+            for r in ok:
+                f.write(json.dumps({
+                    "program_id": r["program_id"],
+                    "program_latency_s": r["program_latency_s"],
+                    "turns_done": r["turns_done"],
+                    "completion_tokens": r["completion_tokens"],
+                    "peak_seq_tokens": r["peak_seq_tokens"],
+                }, ensure_ascii=False) + "\n")
     return summary
 
 
@@ -216,6 +313,10 @@ def main() -> None:
     ap.add_argument("--ctx-tokens", type=int, default=0,
                     help="approx unique filler tokens per program (KV pressure)")
     ap.add_argument("--out", default="")
+    ap.add_argument("--trace-out", default="",
+                    help="write per-turn JSONL records here (characterization)")
+    ap.add_argument("--stream", action="store_true",
+                    help="use streaming to capture TTFT (~prefill) per turn")
     ap.add_argument("--run-id", default="")
     args = ap.parse_args()
     if not args.run_id:
