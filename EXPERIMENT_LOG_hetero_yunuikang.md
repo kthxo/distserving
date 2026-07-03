@@ -78,3 +78,29 @@ python scripts/trace_replay_driver_yunuikang.py --trace mini_trace.jsonl --dry-r
 - 재접속 후 결정할 것: (1) GPU0 1장 스모크 / (2) GPU0+1 2장 스모크 / (3) 스킵하고 Phase B(TraceLab
   클론·정규화, GPU 불필요)로 진행. 3 선택 시 TraceLab 코딩도메인/모델 필터 방향도 함께 결정.
 
+### A-7. 🛑 환경 블로커 발견 — NVIDIA 드라이버 다운그레이드 (2026-07-03, 재접속)
+- 사용자가 **GPU0 1장 스모크** 승인 → vLLM 기동 시도.
+- 실행 명령:
+  ```
+  CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen3-8B --port 8000 \
+    --max-model-len 32768 --gpu-memory-utilization 0.92   # + SETUP_NOTES env
+  ```
+- **엔진 초기화 실패**. 로그(`scratch/vllm_smokeA_8000.log`) 근본 원인:
+  ```
+  RuntimeError: The NVIDIA driver on your system is too old (found version 12060).
+  ```
+- 진단:
+  | 항목 | 값 |
+  |------|-----|
+  | 현재 드라이버 | **560.35.05** (CUDA Version 12.6) |
+  | SETUP_NOTES 기록 | 595.71.05 (CUDA 13세대) — **그 사이 다운그레이드됨** |
+  | torch | 2.11.0+**cu130** (CUDA 13 드라이버 필요) |
+  - torch(cu130)가 요구하는 CUDA 13 런타임을 현재 드라이버(12.6)가 지원 못 함 → GPU init 실패.
+- 조치: 실패한 vLLM 프로세스 정리(`pkill`), GPU 4장 다시 유휴 확인. **아무 GPU도 점유 안 함.**
+- **이건 사용자/관리자 결정이 필요한 블로커** → 여기서 멈추고 문의. 해결 옵션:
+  - (A) 관리자에게 드라이버를 ≥580(CUDA 13)로 복원 요청 — 사용자 sudo 없음.
+  - (B) venv의 torch/vLLM을 현재 드라이버(560/CUDA12.6)에 맞는 **cu12x 빌드로 재설치**
+    (예: `uv pip install vllm --torch-backend=cu126`). sudo 불필요하나 재현 환경 변경 → 승인 필요.
+  - (C) 드라이버가 아직 CUDA13을 지원하는 **다른 서버**(mango3/goguma6 등)에서 진행.
+- Phase A 코드/AC2는 이미 완료(GPU 무관). AC1 실측만 이 블로커 해소 후 가능.
+
