@@ -70,3 +70,11 @@ python scripts/trace_replay_driver_yunuikang.py --trace mini_trace.jsonl --dry-r
 3. 그 뒤: `python scripts/trace_replay_driver_yunuikang.py --trace mini_trace.jsonl --concurrency 4
    --router default --stream` 실행 → 완료 후 `GET /programs`가 0 프로그램인지 확인(AC1 마무리).
 
+### A-6. ⏸ 일시 중단 (2026-07-03)
+- 사용자 이동으로 **GPU 스모크는 진행하지 않고 여기서 일시 정지**. GPU는 4장 전부 유휴,
+  vLLM/프록시 미기동(아무것도 점유 안 함).
+- Phase A 상태: 코드 구현·dry-run 검증·AC2 충족·커밋(`0ccfcca`) 완료. **남은 것은 AC1(실측
+  엔드투엔드 스모크)뿐이며 GPU 승인 대기.**
+- 재접속 후 결정할 것: (1) GPU0 1장 스모크 / (2) GPU0+1 2장 스모크 / (3) 스킵하고 Phase B(TraceLab
+  클론·정규화, GPU 불필요)로 진행. 3 선택 시 TraceLab 코딩도메인/모델 필터 방향도 함께 결정.
+
