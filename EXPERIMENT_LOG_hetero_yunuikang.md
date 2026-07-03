@@ -228,3 +228,41 @@ python scripts/prep_tracelab_yunuikang.py    # -> scratch/traces/tracelab_trace.
   include-reasoning 여부. 4090 KV(~44k)로는 32k 프로그램 1개가 거의 KV를 다 차지 → 달성 가능
   concurrency 범위가 좁음(스래싱은 c=2에서도 유발되나 스윕 폭 제한) — 이 점도 함께 판단 필요.
 
+---
+
+## A-9. ✅ 드라이버 복원 → 환경 복구 → Phase A 실측 스모크 통과 (2026-07-03)
+
+- **관리자가 드라이버 복원**: `nvidia-smi` → **595.71.05 (CUDA 13.2)**. (다운그레이드됐던 560→595 복귀.)
+- **환경 롤백**: torch를 cu126→**cu130으로 복원**(`--torch-backend=cu130 --reinstall-package
+  torch|torchvision|torchaudio`, uv 캐시라 즉시). 이유: cu126 스택은 CUDA13 런타임(libcudart.so.13)을
+  제거해 vLLM(cu13 빌드)이 여전히 실패 → cu130 복원으로 nvidia-cu13 런타임 재설치.
+  - 검증: `torch 2.11.0+cu130`, `cuda.is_available()=True`(4 devs), **`import vllm._C_stable_libtorch` OK**
+    (libcudart.so.13 에러 해소).
+- **vLLM 기동 성공**(GPU0, :8000): `GPU KV cache size: 43,888 tokens`(§10 4090 기준값과 정확히 일치),
+  `Maximum concurrency ... 1.34x`. (경고 `libnvrtc.so.13`은 flashinfer JIT 관련 비치명적 — env 우회로 무해.)
+- **ThunderAgent 프록시**(:9000, `--router default --metrics --profile`): 기동 OK,
+  `router_mode=default`, backend 1개, 지연 import 버그픽스 정상 작동.
+- **Phase A 실측 스모크**(mini_trace 20세션, C=4, stream):
+  ```
+  python scripts/trace_replay_driver_yunuikang.py --trace mini_trace.jsonl \
+    --base-url http://localhost:9000 --backends http://localhost:8000 \
+    --concurrency 4 --router default --stream --run-tag smokeA
+  ```
+  | 항목 | 결과 |
+  |------|------|
+  | completed / failed | **20 / 0** ✅ |
+  | token_match | **within_1pct=1.0, max_abs_err=1토큰** (라이브 서버 prompt_tokens = 우리 목표) ✅ |
+  | prefix_cache_hit_rate | 0.68 (누적 컨텍스트로 실제 KV 재사용 관측) |
+  | 종료 후 `/programs` | **`{}` (programs_count=0)** — 전부 정상 release ✅ |
+  - 산출물: `scratch/smokeA_replay.jsonl`.
+- **→ Phase A AC1 충족**(무오류 완료 + 종료 후 0 프로그램). **AC2는 이미 충족(A-3).
+  ⟹ Phase A 완전 완료.**
+- 스모크 후 서버 정리, GPU 4장 유휴 복귀.
+
+### 상태 요약 (2026-07-03 현재)
+- **환경**: 정상 복구(driver 595/CUDA13, torch cu130, vLLM 0.24.0 동작). homo-homo와 동일 재현 스택.
+- **Phase A**: ✅ 완료. **Phase B**: 파이프라인·전체 데이터셋·fit 서브셋 준비 완료, 단 **fitting 전략·필터
+  최종 결정(B-6)만 남음**.
+- **다음**: 계획서 순서상 **Phase D(TraceLab, 2×4090 mango1 GPU0+1)**. 단 (1) fitting 전략 확정,
+  (2) 대규모 concurrency 스윕은 GPU 장시간 점유 → **사용자 명시 승인 필요**.
+
