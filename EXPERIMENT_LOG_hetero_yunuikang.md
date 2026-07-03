@@ -157,3 +157,46 @@ python scripts/prep_tracelab_yunuikang.py    # -> scratch/traces/tracelab_trace.
    토큰을 output에 포함할지) 기본값을 무엇으로 할지. 현재 스크립트 기본=all·미포함.
 3. (B-3 파이프라인은 전체 데이터셋에도 그대로 적용 가능 — 파일 경로만 `--in ...jsonl.gz`로 교체.)
 
+### B-5. 전체 데이터셋 다운로드 완료 (2026-07-03)
+- 사용자 승인 → releases `v2026-06-08-syfi-trace`의 **`syfi_coding_trace.jsonl.gz` (53.6 MB)** 다운로드.
+  경로: `scratch/traces/syfi_coding_trace.jsonl.gz`.
+- 검증: **357,161턴 / 4,265세션**. provider: claude 140,338 / codex 216,823.
+  top models: gpt-5.5(103k), claude-opus-4-7(88.6k), gpt-5.4(56.5k), gpt-5.3-codex(29.7k),
+  claude-opus-4-6, claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-8 등.
+- 정규화(Phase D용)는 필터 확정(B-4-2) 후 `--in syfi_coding_trace.jsonl.gz`로 실행 예정.
+
+---
+
+## A-8. 🔴 드라이버 블로커 심화 — torch cu126 성공했으나 vLLM 0.24.0이 CUDA13 빌드 (2026-07-03)
+
+> 사용자 승인: "1은 torch 재설치". 진행 결과, torch 교체는 됐으나 **vLLM 바이너리 자체가 CUDA13**
+> 이라 driver 560에서 여전히 실행 불가 — "torch 재설치"를 넘어서는 결정 필요.
+
+### 진행 & 발견
+1. **롤백 스냅샷**: `uv pip freeze > scratch/pip_freeze_before_cu126.txt` (torch/vllm cu130 원본 기록).
+2. **torch cu126 재설치 성공**: `uv pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
+   --torch-backend=cu126 --reinstall-package torch|torchvision|torchaudio`.
+   → `torch 2.11.0+cu126`, nvidia-*-cu12(12.6) 설치. **`torch.cuda.is_available()=True`,
+   4×4090 인식, GPU matmul 성공** — driver 560과 torch는 이제 정상.
+3. **그러나 vLLM 기동 실패**: `ImportError: libcudart.so.13: cannot open shared object file`.
+   → vLLM 0.24.0의 컴파일 확장 `vllm._C_stable_libtorch`가 **CUDA 13 런타임(libcudart.so.13)**에 링크됨.
+4. **vLLM cu126 재설치 시도도 실패**: `uv pip install vllm==0.24.0 --torch-backend=cu126
+   --reinstall-package vllm` 후에도 `import vllm._C_stable_libtorch` → 동일 `libcudart.so.13` 에러.
+   → **PyPI의 vllm 0.24.0 휠은 CUDA13 단일 빌드**. `--torch-backend`는 torch 인덱스만 바꿀 뿐 vLLM
+   바이너리의 CUDA 링크는 안 바뀜. cu12 빌드가 인덱스에 없음.
+5. libcudart.so.13을 억지로 제공해도 4090은 forward-compat 미지원 → 실제 GPU 호출에서 driver
+   major 불일치로 실패. **결론: vLLM 0.24.0(CUDA13)은 driver 560(CUDA12.6)에서 실행 불가.**
+
+### 현재 상태
+- torch=cu126(정상), vLLM=cu13(실행불가). 롤백은 `pip_freeze_before_cu126.txt`로 즉시 가능.
+- GPU 4장 유휴, 서버 미기동.
+
+### 🛑 사용자 결정 필요 (torch 재설치 범위 초과)
+- (1) **드라이버 ≥580 복원(관리자)** — 기존 재현 스택(torch cu130 + vllm cu13) 그대로 유지.
+  homo-homo 결과와 **완전 동일 환경** 보장. *권장(결과 비교가능성 최상).* → 이 경우 torch cu130 롤백.
+- (2) **vLLM을 CUDA12.x 빌드 버전으로 다운그레이드** — torch cu126 유지. 단 vLLM 버전이 바뀌어
+  **homo-homo baseline과 환경 불일치**(동작/성능 차이 가능), ThunderAgent 호환성 재확인 필요.
+  (driver 560=CUDA12.6이므로 cu126 이하 빌드 필요 → 상당히 오래된 vLLM일 수 있어 리스크.)
+- (3) **다른 서버(mango3/goguma6)** 에서 진행 — 드라이버가 CUDA13 지원하면 기존 스택 그대로.
+  서버 IP·GPU 지정 필요.
+
