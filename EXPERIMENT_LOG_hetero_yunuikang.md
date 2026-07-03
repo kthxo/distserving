@@ -266,3 +266,43 @@ python scripts/prep_tracelab_yunuikang.py    # -> scratch/traces/tracelab_trace.
 - **다음**: 계획서 순서상 **Phase D(TraceLab, 2×4090 mango1 GPU0+1)**. 단 (1) fitting 전략 확정,
   (2) 대규모 concurrency 스윕은 GPU 장시간 점유 → **사용자 명시 승인 필요**.
 
+---
+
+## Phase D — hetero-homo (TraceLab, 2×4090) — 셋업 완료, 스윕 대기 (2026-07-03)
+
+- **사용자 결정**: fitting 전략 **(a) fit32k 서브셋**(`scratch/traces/tracelab_fit32k.jsonl`,
+  982세션/6,107턴, input≤32k, tool cap 30s), Phase D 진행 승인, **tmux로 실행**.
+
+### D-0. 준비한 스크립트 (신규)
+- **`scripts/_serve_vllm_yunuikang.sh <GPU> <PORT>`** — env 우회 포함 단일 vLLM 백엔드 기동 헬퍼.
+- **`scripts/run_trace_sweep_yunuikang.sh <tr|default> <out.jsonl> <trace.jsonl> [C...]`** —
+  2백엔드 프록시를 해당 router로 재기동 후 concurrency 스윕, **각 점 REPEAT회 반복**(기본 3, 에러바).
+  부하원 = `trace_replay_driver_yunuikang.py`. env knobs: `NPROG`(점당 프로그램, 기본 64),
+  `REPEAT`(기본 3), `TAG`(데이터셋 태그). 결과: 점·반복마다 JSON 1줄 append.
+
+### D-1. 현재 기동 상태 (이 세션에서 띄워둠 — 계속 살아있음)
+- **tmux 세션 `phaseD`**: window `gpu0`=vLLM :8000(GPU0), `gpu1`=vLLM :8001(GPU1).
+  둘 다 `GPU KV cache size: 43,888 tokens`(4090 기준 일치). `tmux attach -t phaseD`로 확인.
+- **프록시**: nohup `thunderagent :9000 --router default --metrics --profile`, 2백엔드 연결(up).
+- 검증: `default c=8, 48프로그램` 1회 실행이 **2분 초과**(실제 대용량 프롬프트+tool sleep) →
+  전체 스윕은 길다(≈36런). **tmux 실행 필수 확인.**
+
+### D-2. ⏭ 이어서 실행할 스윕 (tmux에서)
+사용자가 Claude를 tmux에 넣고 이어갈 예정. 백엔드/프록시는 이미 up이므로 아래로 스윕 시작:
+```
+cd /home/yunuikang/yunuikang_work/distserving
+S=/home/yunuikang/yunuikang_work/scratch
+T=$S/traces/tracelab_fit32k.jsonl
+# default → tr 순차 (각 점 3회, 64프로그램, C=2..48). run_trace_sweep이 프록시를 해당 router로 재기동함.
+NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh default $S/hetero_homo_tracelab_default.jsonl $T 2 4 8 16 32 48
+NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr      $S/hetero_homo_tracelab_tr.jsonl      $T 2 4 8 16 32 48
+```
+- 주의: 저부하 점(c=2,4)은 프로그램 직렬화로 느릴 수 있음 — 필요시 `2 4` 빼고 `8 16 32 48`부터,
+  또는 `NPROG=48`로 시간 단축. tool cap은 fit32k에 이미 30s 적용됨.
+- 스윕 후: `plot_results_yunuikang.py`로 tr vs default 그래프
+  (`figures/hetero_homo_tracelab_{throughput,hitrate,p95}.png`) — plot 스크립트 입력포맷 확인 필요.
+
+### D-3. ⏸ 일시 중단 (사용자 요청: Claude를 tmux에 넣기 위해 커밋/로그 후 정지)
+- 서버(tmux `phaseD` 2백엔드 + 프록시)는 **켜둔 채로** 멈춤 → 재개 시 바로 D-2 스윕 실행 가능.
+  (GPU 점유 중. 오래 방치하려면 `tmux kill-session -t phaseD; pkill -f bin/thunderagent`로 정리.)
+
