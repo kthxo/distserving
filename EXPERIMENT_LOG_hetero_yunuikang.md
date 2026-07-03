@@ -306,3 +306,23 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 - 서버(tmux `phaseD` 2백엔드 + 프록시)는 **켜둔 채로** 멈춤 → 재개 시 바로 D-2 스윕 실행 가능.
   (GPU 점유 중. 오래 방치하려면 `tmux kill-session -t phaseD; pkill -f bin/thunderagent`로 정리.)
 
+### D-4. ▶ 스윕 실행 재개 (tmux 안, unattended) — default 완료 (2026-07-03)
+- 설정: `NPROG=64 REPEAT=3 TAG=tracelab`, trace=`tracelab_fit32k.jsonl`(982세션), C=2 4 8 16 32 48.
+- **default 스윕 완료**: 18런(6×3) 전부 성공, 실질 에러 없음(HF 토큰 경고만). 결과 파일:
+  `scratch/hetero_homo_tracelab_default.jsonl`.
+
+**default 결과 (3회 평균)**:
+| C | thru(p/s) | p95(s) | KV hit | completed(/64) |
+|---|-----------|--------|--------|----------------|
+| 2  | 0.048 | 110.0 | **0.823** | 62 |
+| 4  | 0.093 | 112.9 | 0.611 | 62 |
+| 8  | 0.120 | 153.4 | 0.210 | 62 |
+| 16 | 0.107 | 289.1 | 0.047 | 62 |
+| 32 | 0.108 | 418.2 | 0.032 | 61 |
+| 48 | 0.102 | 480.7 | 0.026 | 62 |
+
+- **관찰**: 실제 대용량 컨텍스트(median 18k) 워크로드라 4090 2장(KV 각 43,888토큰)엔 동시 ~2–4개만
+  적재 → **c가 오르면 hit rate 급락(0.82→0.026), p95 폭증(110→481s)**. throughput은 c=8(0.12p/s)에서
+  천장 후 정체. §9 합성 스래싱과 같은 패턴을 **실제 trace에서 재현**(default는 용량 무시로 붕괴).
+- tr 스윕은 이어서 실행 → 완료 후 비교표 추가 예정.
+
