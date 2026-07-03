@@ -104,3 +104,56 @@ python scripts/trace_replay_driver_yunuikang.py --trace mini_trace.jsonl --dry-r
   - (C) 드라이버가 아직 CUDA13을 지원하는 **다른 서버**(mango3/goguma6 등)에서 진행.
 - Phase A 코드/AC2는 이미 완료(GPU 무관). AC1 실측만 이 블로커 해소 후 가능.
 
+---
+
+## Phase B — TraceLab 데이터셋 준비 (GPU 불필요, 블로커 우회하며 진행)
+
+> GPU 드라이버 블로커(A-7)와 무관하게 진행 가능한 작업이라 idle 중 착수. 정규화 파이프라인을
+> 구현·검증했고, **전체 데이터셋 다운로드·필터 확정은 사용자 결정 대기**(B-4).
+
+### B-1. TraceLab 클론 + 데이터 위치·스키마 파악
+- `git clone --depth 1 https://github.com/uw-syfi/TraceLab.git` → `scratch/TraceLab/`.
+- 저장소 내 실제 per-turn 데이터: **`example_sessions/sanitized/round_trace.jsonl`** (공개 배포 형태,
+  id 가명화·경로/도구입력 제거). 19턴 / **2세션**(Claude 10라운드 `claude-opus-4-8`, Codex 9라운드 `gpt-5.4`).
+- **전체 공개 데이터셋은 저장소에 없음** — GitHub releases의 `syfi_coding_trace.jsonl.gz`(정규화 JSONL,
+  동일 row 스키마) / `syfi_coding_trace.duckdb` 별도 다운로드.
+- 필드 매핑(계획서 §2 canonical): `session_id←session_id`, `turn←round_index`,
+  `input_tokens←input_tokens_total`(=prefix+newly_append, 누적 반영), `output_tokens←output_tokens`,
+  `cached_tokens←claude_cache_read_input_tokens/prefix_tokens`.
+- **tool_duration_s**: 각 라운드 `tools[]`의 wall span `max(result_at)−min(emitted_at)`(병렬 도구
+  중복 회피), 도구 없으면 0. → **human-in-the-loop 대기 자동 제외**: 사람이 여는 라운드
+  (`first_input_event_type=user_message`)는 tools 비어 있어 0. 세션 마지막 턴도 0으로 강제.
+
+### B-2. 구현한 파일
+- **`scripts/prep_tracelab_yunuikang.py`** — round_trace(.jsonl/.jsonl.gz) → canonical JSONL.
+  - 필터: `--provider {all|claude|codex}`, `--model <substr>`, `--min-turns`, `--include-reasoning`.
+  - 필터 후 세션별 `turn` 0..n-1 재인덱싱(단조 보장), 스키마 검증(`validate()`), 요약통계 출력,
+    사이드카 `*.meta.json`(소스·필터·행수) 기록.
+
+### B-3. 검증 결과 (2세션 샘플, GPU 불필요)
+```
+python scripts/prep_tracelab_yunuikang.py    # -> scratch/traces/tracelab_trace.jsonl
+```
+- **스키마 검증 통과**(violations 0), turn 단조 증가, tool_duration ≥ 0. ✅ **AC(스키마) 충족**.
+- 요약통계(§10과 대조):
+  | 지표 | min | median | max | mean |
+  |------|-----|--------|-----|------|
+  | 세션당 턴수 | 9 | 9.5 | 10 | 9.5 |
+  | input_tokens | 9,324 | 32,272 | 48,305 | 27,053 |
+  | output_tokens | 49 | 273 | 2,475 | 597 |
+  | tool_duration_s | 0.0 | 0.145 | 21.467 | 4.21 |
+  | cached_tokens | 3,456 | 27,217 | 47,506 | 24,924 |
+- **실제 워크로드 특성**(합성 대비): 합성은 input~14.5k 균일·output~28 고정·tool 0.4s 설계값이었으나,
+  실제는 input **9.3k~48.3k 가변**, output **49~2475**(실제 reasoning 길이), tool **0~21.5s 실측 지연**.
+  → 실제 데이터에서 KV 압박·재프리필이 훨씬 불균일. (Phase D에서 tr 이점 재확인 대상.)
+- **replay 드라이버 왕복 검증**(dry-run, tracelab_trace 입력): 19턴, token_match within_1pct 0.89,
+  평균오차 44토큰(≈27k 프롬프트의 0.16%). 큰 타깃에서 필러 보정이 잘 수렴함 확인.
+
+### B-4. ⏳ 사용자 결정 대기 (Phase B 마무리 조건)
+1. **전체 데이터셋 다운로드 여부**: 지금은 저장소 내 **2세션 샘플**뿐. Phase D 실험에 쓰려면
+   releases의 `syfi_coding_trace.jsonl.gz`(전체 sanitized all-user trace) 다운로드가 필요.
+   → 다운로드할지, 어느 정도 규모면 되는지 결정 필요(네트워크·용량).
+2. **필터 확정**: `--provider`(claude/codex/all), `--model`, `--include-reasoning`(Codex reasoning
+   토큰을 output에 포함할지) 기본값을 무엇으로 할지. 현재 스크립트 기본=all·미포함.
+3. (B-3 파이프라인은 전체 데이터셋에도 그대로 적용 가능 — 파일 경로만 `--in ...jsonl.gz`로 교체.)
+
