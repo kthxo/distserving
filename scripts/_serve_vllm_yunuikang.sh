@@ -11,4 +11,4 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 LOG=/home/yunuikang/yunuikang_work/scratch/vllm_phaseD_${PORT}.log
 echo "[serve] GPU=$GPU PORT=$PORT log=$LOG"
 CUDA_VISIBLE_DEVICES="$GPU" exec vllm serve Qwen/Qwen3-8B \
-  --port "$PORT" --max-model-len 32768 --gpu-memory-utilization 0.92 2>&1 | tee "$LOG"
+  --host 0.0.0.0 --port "$PORT" --max-model-len 32768 --gpu-memory-utilization 0.92 2>&1 | tee "$LOG"

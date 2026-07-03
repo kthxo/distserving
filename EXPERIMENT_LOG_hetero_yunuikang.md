@@ -326,3 +326,19 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
   천장 후 정체. §9 합성 스래싱과 같은 패턴을 **실제 trace에서 재현**(default는 용량 무시로 붕괴).
 - tr 스윕은 이어서 실행 → 완료 후 비교표 추가 예정.
 
+### D-5. 🔻 세션 crash 로 tr 스윕 중단 → 재기동 (2026-07-03)
+- **사건**: tr 스윕 실행 중 세션(tmux/SSH)이 죽어 tmux `phaseD`·vLLM 2백엔드·프록시·tr 드라이버가
+  전부 종료. `hetero_homo_tracelab_tr.jsonl`은 부분(1,332 bytes)만 기록됨.
+- **원인 파악 (OOM 여부)**: `dmesg`·`journalctl -k` **접근 불가**(sudo 없음, dmesg 0 라인) → 커널 OOM
+  흔적 직접 확인 불가. 그러나 **호스트 RAM 503 GiB 중 471 GiB 여유**(free -h)로 호스트 메모리 OOM
+  가능성 낮음. GPU도 default 스윕(동일 설정) 18런 내내 정상이었음 → **GPU OOM보다 세션(SSH/tmux)
+  종료로 자식 프로세스가 함께 죽은 것**으로 추정. **확정적 OOM 근거 없음.**
+- **조치**: OOM 근거가 없으므로 **NPROG=64 유지**(default와 동일 파라미터 → tr vs default 비교 일관성).
+  default 결과(18/18, 커밋 `02b7f6e`)는 보존, 손대지 않음.
+- **재기동 절차**(전부 tmux `phaseD` 안):
+  1. 백엔드 2개 새 창(gpu0:8000, gpu1:8001)에 env 우회 + `--host 0.0.0.0` 적용해 재기동
+     (`_serve_vllm_yunuikang.sh`에 `--host 0.0.0.0` 추가).
+  2. 프록시(:9000, 2백엔드) 재기동.
+  3. 부분 파일 `hetero_homo_tracelab_tr.jsonl`·`sweep_tr.out` 삭제(클린 데이터).
+  4. tr 스윕 처음부터: C=2 4 8 16 32 48, REPEAT=3, NPROG=64.
+
