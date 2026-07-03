@@ -79,6 +79,8 @@ def normalize(rows: List[dict], args) -> List[dict]:
             continue
         if args.model and args.model not in str(r.get("model", "")):
             continue
+        if int(r.get("input_tokens_total") or 0) <= 0:
+            continue                              # drop invalid/empty rows
         sessions[r["session_id"]].append(r)
 
     out: List[dict] = []
@@ -86,17 +88,25 @@ def normalize(rows: List[dict], args) -> List[dict]:
         rs.sort(key=lambda r: r.get("round_index", 0))
         if len(rs) < args.min_turns:
             continue
+        # hardware-fit: drop whole session if any turn's input exceeds the cap
+        # (session-level so accumulated-context integrity is preserved)
+        if args.max_input_tokens > 0 and \
+                max(int(r.get("input_tokens_total") or 0) for r in rs) > args.max_input_tokens:
+            continue
         turns = []
         for i, r in enumerate(rs):
             out_tok = int(r.get("output_tokens") or 0)
             if args.include_reasoning and r.get("reasoning_output_tokens"):
                 out_tok += int(r["reasoning_output_tokens"])
+            td = tool_duration_s(r)
+            if args.cap_tool_s > 0:
+                td = min(td, args.cap_tool_s)     # clip multi-hour idle gaps
             rec = {
                 "session_id": sid,
                 "turn": i,                       # re-indexed contiguous
                 "input_tokens": int(r.get("input_tokens_total") or 0),
                 "output_tokens": out_tok,
-                "tool_duration_s": round(tool_duration_s(r), 3),
+                "tool_duration_s": round(td, 3),
             }
             cached = r.get("claude_cache_read_input_tokens")
             if cached is None:
@@ -167,6 +177,12 @@ def main() -> None:
     ap.add_argument("--provider", default="all", choices=["all", "claude", "codex"])
     ap.add_argument("--model", default="", help="substring filter on model name (optional)")
     ap.add_argument("--min-turns", type=int, default=1)
+    ap.add_argument("--max-input-tokens", type=int, default=0,
+                    help="drop whole sessions where any turn's input_tokens exceeds this "
+                         "(hardware fit; 0 = no limit). e.g. 32768 for a 4090 --max-model-len.")
+    ap.add_argument("--cap-tool-s", type=float, default=0.0,
+                    help="clip tool_duration_s to at most this many seconds "
+                         "(0 = no cap; avoids multi-hour idle gaps in replay)")
     ap.add_argument("--include-reasoning", action="store_true",
                     help="add reasoning_output_tokens to output_tokens")
     args = ap.parse_args()
@@ -183,8 +199,10 @@ def main() -> None:
     # sidecar metadata
     meta = {"source": args.inp, "provider_filter": args.provider,
             "model_filter": args.model or None, "min_turns": args.min_turns,
+            "max_input_tokens": args.max_input_tokens, "cap_tool_s": args.cap_tool_s,
             "include_reasoning": args.include_reasoning,
-            "input_rows": len(rows), "output_turns": len(recs)}
+            "input_rows": len(rows), "output_turns": len(recs),
+            "output_sessions": len({r["session_id"] for r in recs})}
     with open(args.out.rsplit(".", 1)[0] + ".meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 

@@ -199,4 +199,32 @@ python scripts/prep_tracelab_yunuikang.py    # -> scratch/traces/tracelab_trace.
   (driver 560=CUDA12.6이므로 cu126 이하 빌드 필요 → 상당히 오래된 vLLM일 수 있어 리스크.)
 - (3) **다른 서버(mango3/goguma6)** 에서 진행 — 드라이버가 CUDA13 지원하면 기존 스택 그대로.
   서버 IP·GPU 지정 필요.
+- **사용자 결정(2026-07-03)**: 처음엔 (3) 다른 서버 선택했으나, 이후 **(1) 관리자에게 드라이버
+  복원 요청**하기로 방향 전환(관리자 문의 메시지 작성 중). mango1 드라이버를 595.71.05(CUDA13)로
+  복원되면 기존 재현 스택 그대로 사용. → 복원 후 torch를 cu130으로 롤백 예정
+  (`scratch/pip_freeze_before_cu126.txt`).
+
+### B-6. 전체 데이터셋 규모 분석 + 하드웨어 fit 서브셋 (2026-07-03, GPU 불필요)
+- 전체 정규화(all providers) 결과 요약: **4,265세션 / 357,161턴**. 그러나 **실제 대용량 컨텍스트**라
+  4090으로 그대로 재생 불가:
+  | 지표 | median | p95 | max |
+  |------|--------|-----|-----|
+  | 세션당 턴수 | 17 | 315 | 7,610 |
+  | input_tokens | 124,018 | 406,015 | 999,888 |
+  | output_tokens | 214 | 1,993 | 64,000 |
+  | tool_duration_s | 0.169 | 30.2 | **154,088 (≈42h)** |
+- **핵심 발견**: turn의 **92.5%가 vLLM `--max-model-len 32768` 초과**. 전 구간 ≤32768인 세션은
+  **23%(982개)** 뿐(≤16k 7.5%, ≤8k 2.1%). input_tokens=0 무효행 12개. tool wall>300s 2,368턴.
+  → 실제 워크로드를 4090(32k/KV~44k)에 맞추려면 **fitting 전략(설계 결정)** 필요.
+- **prep 스크립트 확장**: 무효행(input≤0) 자동 제거 + `--max-input-tokens N`(어느 턴이든 N 초과 시
+  세션 통째 제외; 누적 컨텍스트 무결성 보존) + `--cap-tool-s S`(멀티시간 유휴 갭 클립).
+- **Phase-D fit 서브셋 생성**(바로 사용 가능):
+  `prep_tracelab_yunuikang.py --in syfi_coding_trace.jsonl.gz --out tracelab_fit32k.jsonl
+   --max-input-tokens 32768 --cap-tool-s 30` → **982세션 / 6,107턴**, input median 18k(max 32,753),
+  tool median 0.047s(cap 30s). schema_ok ✅.
+  - 산출물: `scratch/traces/tracelab_fit32k.jsonl`(+`.meta.json`), 전체: `tracelab_trace_full.jsonl`.
+- **⏳ 남은 설계 결정(사용자/지도교수)**: fitting 전략을 (a) ≤32768 세션만(현 fit 서브셋, 실제이나
+  짧은 세션 편향) / (b) 턴별 클립 / (c) 토큰 스케일다운 중 무엇으로 할지, provider 필터(claude/codex),
+  include-reasoning 여부. 4090 KV(~44k)로는 32k 프로그램 1개가 거의 KV를 다 차지 → 달성 가능
+  concurrency 범위가 좁음(스래싱은 c=2에서도 유발되나 스윕 폭 제한) — 이 점도 함께 판단 필요.
 
