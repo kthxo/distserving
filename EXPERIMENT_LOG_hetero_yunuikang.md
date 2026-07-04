@@ -573,4 +573,23 @@ throughput뿐 아니라 지연에서도 이득으로 전환. 그래프 `figures/
 - **발표자 노트 추가**(14슬라이드 전부): 청중=지도교수 대상 구어체 대본. 각 노트 = (보여주는 것 →
   왜 중요/핵심 숫자 → so-what → 예상질문 대비). 특히 D②(throughput 반전)·F③(H1 반증)에 정직 포인트와
   예상질문 답변 포함. 스크립트 `make_deck_hetero_yunuikang.py`의 `NOTES` 리스트로 재현 가능.
+- **결과 슬라이드 표 확장**: 슬7·8(D)에 C=2·4·8·16·32·48 전부, 슬9(F)에 C=8·16·24·32·48 통합표
+  (thru·hit·p95). **F p95 사후집계**(각 런 `latency_p95_s` 기록됨): c48 tr 70.2 vs def 149.0s(0.47×) —
+  F에선 tr이 p95도 우세(D와 반대). 그래프 `homo_hetero_p95.png`·전역 `homo_hetero_hitrate.png` 추가.
+
+---
+
+## Phase G — hetero-hetero (실제 TraceLab × 4090+5090) — 스윕 실행 중 (2026-07-04)
+
+- **목표**: 2×2 매트릭스 마지막 칸. 데이터=실제 TraceLab fit32k(D와 동일), GPU=4090+5090(F와 동일).
+  핵심 질문: D(2×4090)에서 tr이 throughput 잃은 원인(프로그램이 4090에 ~2개)을, 큰 5090(89,040토큰,
+  ~4개) 추가로 **실데이터에서 tr이 회복하는가**.
+- **인프라 재사용**: mango1 4090:8000 + goguma6 5090:8000 (둘 다 up 확인, 재기동 불필요).
+  프록시 `--backends http://143.248.53.25:8000,http://143.248.53.112:8000`. KV 4090=43,888 / 5090=89,040.
+- **오케스트레이터 확장**: `run_hetero_sweep_yunuikang.py`에 `--trace` 부하원 옵션 추가
+  (trace_replay_driver 사용, 백엔드별 kv_usage·split·hit·reprefill·pause 샘플링은 F와 동일).
+- **스윕**: workload=`tracelab_fit32k.jsonl`(D와 동일). router tr→default, **C=2·4·8·16·32·48(D와 동일 축),
+  3회, NPROG=64** = 36런. 출력: `scratch/hetero_hetero_{tr,default}.jsonl`.
+- **예상 ~7–9시간**(D 실측 8.75h 기준; decode·tool sleep 지배적). background 실행, 완료 시 분석.
+- 시작 검증: 프록시 tr 재기동 OK, trace_replay_driver 구동 확인(--trace 경로 정상). ⏳ 진행 중.
 
