@@ -342,3 +342,37 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
   3. 부분 파일 `hetero_homo_tracelab_tr.jsonl`·`sweep_tr.out` 삭제(클린 데이터).
   4. tr 스윕 처음부터: C=2 4 8 16 32 48, REPEAT=3, NPROG=64.
 
+### D-6. ✅ tr 스윕 완료 + tr vs default 비교 (2026-07-04)
+- 재기동 후 tr 스윕 18런(6×3) 전부 성공, 실질 에러 없음. 결과: `scratch/hetero_homo_tracelab_tr.jsonl`.
+- 서버는 계속 유지(tmux `phaseD` 2백엔드 + 프록시). 백엔드 KV 각 43,888토큰 동일.
+
+**tr vs default (3회 평균, tracelab fit32k, 2×4090):**
+| C | thru(p/s) def/tr | p95(s) def/tr | **KV hit def/tr** |
+|---|------------------|---------------|-------------------|
+| 2  | 0.048 / 0.048 | 110 / 110 | 0.823 / 0.823 |
+| 4  | 0.093 / 0.084 | 113 / 132 | 0.611 / **0.786** |
+| 8  | 0.120 / 0.078 | 153 / 184 | 0.210 / **0.800** |
+| 16 | 0.107 / 0.073 | 289 / 595 | 0.047 / **0.799** (17×) |
+| 32 | 0.108 / 0.069 | 418 / 660 | 0.032 / **0.774** (24×) |
+| 48 | 0.102 / 0.067 | 481 / 727 | 0.026 / **0.772** (30×) |
+
+**해석 (실제 데이터 — 합성 §9와 다른 뉘앙스, 중요):**
+- **KV hit rate: tr이 압도적 유지**. 부하가 올라도 tr은 ~0.77–0.80을 지키는 반면 default는
+  0.82→**0.026으로 붕괴**(c=48에서 tr이 **30배**). → ThunderAgent 핵심 주장(program-aware
+  capacity scheduling이 KV 스래싱을 막는다)을 **실제 TraceLab 데이터에서 재현**. ✅
+- **그러나 throughput·p95는 tr이 오히려 불리**(c=48: thru 0.067 vs 0.102, p95 727s vs 481s).
+  합성 §9(tr이 thru +57%·p95 낮음)와 **정반대**. 원인 추정: 실제 프로그램이 매우 큼(input median
+  18k, 최대 32k)이라 4090 KV(43,888토큰)에 **동시 ~2개**만 적재 → tr은 용량 초과분을 적극
+  pause/queue하여 **캐시는 보존하나 동시 실행 병렬성이 급감**(closed-loop이라 paused 프로그램이 slot
+  점유) → throughput 제한·대기지연↑. default는 캐시를 갈아엎으며(reprefill 폭증) 병렬성을 유지해
+  **wall-clock throughput은 더 높음**.
+- **시사점**: 프로그램 크기가 KV 용량에 육박하는 하드웨어에서는 tr의 캐시 보존 이득이
+  throughput/latency로 **전환되지 않음**. 이는 KV 용량이 결속 제약임을 보여주며 → **용량 비례
+  라우팅·이종 GPU(더 큰 KV) 필요성**의 근거를 오히려 강화(§12 가설과 연결). *한계*: 각 점 3회지만
+  tr은 반복 간 hit 편차가 있음(스케줄러 pause 타이밍 의존); NPROG=64 고정 offered load.
+
+### D-7. Phase D(TraceLab) AC 상태
+- ✅ tr vs default throughput/KV hit/p95 곡선 확보(데이터셋=TraceLab). 결과 JSONL 2개 저장.
+- ⏳ 그래프(`figures/hetero_homo_tracelab_*.png`)는 다음 단계에서 `plot_results_yunuikang.py`로 생성 예정.
+- 기대치("중고부하 tr 우위") 대비: **hit rate에서는 확실한 tr 우위, throughput/p95에서는 아님**(위 해석).
+
