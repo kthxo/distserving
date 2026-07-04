@@ -548,3 +548,18 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 - 스크립트: `scripts/plot_char_tracelab_yunuikang.py`
 - 원시: `scratch/char_tracelab_c1.trace.jsonl`(per-turn), `scratch/char_tracelab_c1.summary.jsonl`
 
+---
+
+## 미팅 덱 빌드 (2026-07-04)
+- **`scripts/make_deck_hetero_yunuikang.py`** (python-pptx 1.0.2, 기존 make_deck 스타일 재사용) →
+  **`meeting_hetero_yunuikang.pptx` (14슬라이드, 507KB, figures/ 실제 PNG 임베드)**.
+- 구성: 타이틀 / 배경·목표(2×2) / 방법(HW·KV풀) / **워크로드 특성 3장**(tokens·lifetime+breakdown·KV)
+  / **D 결과 2장**(hit rate 압승 → throughput·p95 반전) / **F 결과 3장**(전역 2배·백엔드별 핵심·H1 반증)
+  / 종합 비교표(homo §9 +57% ↔ D −34% ↔ F +100%) / 시사점(용량 비례 라우팅) / 한계·TODO.
+- 톤: 워크로드 특성(4~6) → D 결과(7~8) 인과 연결, homo-homo 비교(12)로 "언제 tr이 이기고 지는지".
+- 검증: 14슬라이드, overflow 0, 참조 PNG 9종 존재 확인. (렌더러(libreoffice) 부재로 시각 최종확인은
+  사용자 열람 필요.)
+- **발표자 노트 추가**(14슬라이드 전부): 청중=지도교수 대상 구어체 대본. 각 노트 = (보여주는 것 →
+  왜 중요/핵심 숫자 → so-what → 예상질문 대비). 특히 D②(throughput 반전)·F③(H1 반증)에 정직 포인트와
+  예상질문 답변 포함. 스크립트 `make_deck_hetero_yunuikang.py`의 `NOTES` 리스트로 재현 가능.
+
