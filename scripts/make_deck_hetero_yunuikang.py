@@ -5,7 +5,7 @@ Analytical narrative: workload characterization (TraceLab vs homo-homo synthetic
 -> D(TraceLab, 2x4090) results explained by that characterization -> F(4090+5090)
 per-backend results -> homo-homo comparison -> revised research direction.
 
-Inserts the real PNGs from figures/. Output: meeting_hetero_yunuikang.pptx
+Inserts the real PNGs from figures/. Output: slides/2026-07-04_meeting_hetero_yunuikang.pptx
 """
 import os
 from pptx import Presentation
@@ -15,7 +15,7 @@ from pptx.enum.text import PP_ALIGN
 
 REPO = "/home/yunuikang/yunuikang_work/distserving"
 FIG = os.path.join(REPO, "figures")
-OUT = os.path.join(REPO, "meeting_hetero_yunuikang.pptx")
+OUT = os.path.join(REPO, "slides", "2026-07-04_meeting_hetero_yunuikang.pptx")
 
 NAVY = RGBColor(0x1B, 0x2A, 0x4A)
 BLUE = RGBColor(0x2E, 0x6D, 0xB4)

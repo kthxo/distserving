@@ -2,8 +2,8 @@
 
 > 작성: 강윤의 · 브랜치 `yunuikang/thunderagent` · 서버: mango1 (KAIST)
 > 시작: 2026-07-03
-> 근거 계획서: `../EXPERIMENT_PLAN_hetero_yunuikang.md`
-> 선행 결과: `EXPERIMENT_LOG_yunuikang.md`(homo-homo 완료), `SETUP_NOTES_yunuikang.md`(환경)
+> 근거 계획서: `../plans/2026-07-04_EXPERIMENT_PLAN_hetero_yunuikang.md`
+> 선행 결과: `2026-07-02_EXPERIMENT_LOG_yunuikang.md`(homo-homo 완료), `2026-07-01_SETUP_NOTES_yunuikang.md`(환경)
 > 진행 순서: Phase A → B → D(TraceLab) → C → D(SWE-bench) → E → F (한 번에 한 Phase, 사이에 확인).
 
 ---
@@ -379,7 +379,7 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 ### D-8. 스코프 변경 + D(TraceLab) 마무리 (2026-07-04)
 - **스코프 변경(사용자 지시)**: Phase C(SWE-bench 녹화)·D(SWE-bench)는 **보류(다음 미팅 이후)**.
   이번 실행 순서 = **D(TraceLab) 마무리 → E(cross-node homo 풀 스윕) → F(homo-hetero, goguma6 5090)**.
-  - 계획서 `../EXPERIMENT_PLAN_hetero_yunuikang.md` 갱신함(Phase C·D 헤더에 보류 표기, 실행순서 갱신).
+  - 계획서 `../plans/2026-07-04_EXPERIMENT_PLAN_hetero_yunuikang.md` 갱신함(Phase C·D 헤더에 보류 표기, 실행순서 갱신).
     ⚠️ 단 계획서는 **git repo 밖**(상위 `yunuikang_work`, 비-git)이라 **커밋 불가** — 디스크 저장으로만 반영.
 - **D(TraceLab) 결과 확인**: default/tr 각 **18런**(C=2·4·8·16·32·48 × 3회), concurrency 전 구간 커버.
   런당 실패 ~2/64 프로그램(경미, completed 62/64) — offered load 충분.

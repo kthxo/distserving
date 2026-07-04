@@ -2,7 +2,7 @@
 """TraceLab workload characterization (mirrors §10 homo-homo synthetic method).
 
 Panels (figures/char_tracelab_*.png), each overlaying the homo-homo synthetic
-reference (EXPERIMENT_LOG_yunuikang.md §10) for contrast:
+reference (logs/2026-07-02_EXPERIMENT_LOG_yunuikang.md §10) for contrast:
   1) tokens        : per-turn input & output token histograms
   2) kv            : per-session peak KV (GiB) hist vs 4090/5090 pool lines
   3) lifetime      : per-session lifetime distribution        (needs --profile-trace)
