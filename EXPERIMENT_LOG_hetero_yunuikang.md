@@ -433,3 +433,23 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 - **대기 항목(사용자 보고)**: goguma6 nvidia-smi CUDA 버전, torch/vllm import 성공 여부,
   기동 시 `GPU KV cache size: N tokens`(5090 실측 — §10-4 추정 ~97k 검증), `/health` OK.
 
+### F-1. goguma6(5090) 기동 성공 + cross-node 검증 + 스모크 (2026-07-04)
+- **goguma6 vLLM 정상 기동**(사용자 실행): `/health` OK. **GPU KV cache size = 89,040 tokens
+  (Available KV 12.23 GiB)**. Blackwell(sm_120)에서 vLLM 0.24.0/cu13 스택이 **문제없이 동작**
+  (셋업 스크립트 `--torch-backend=auto`로 자동 해결, 별도 우회 불필요).
+- **5090 KV 실측 vs §10-4 추정**: 실측 **89,040** vs 추정 ~97,481 → 근접. **4090(43,888) 대비 2.03×**
+  (§10-5 추정 ~2.2× 근접). → 이종 용량비 **5090:4090 ≈ 2:1** 확정(실측).
+- **cross-node 검증(mango1에서)**: goguma6:8000·mango1:8000 둘 다 IP로 도달 OK, 동일 모델
+  `Qwen/Qwen3-8B`, **RTT 0.196ms**(동일 LAN, 오버헤드 무시가능).
+- **프록시**(mango1:9000) `--backends http://143.248.53.25:8000,http://143.248.53.112:8000` 기동.
+- **오케스트레이터**(신규 `scripts/run_hetero_sweep_yunuikang.py`): 실행 중 백엔드별
+  `kv_cache_usage_perc`·프록시 `paused` 샘플링 + 백엔드별 split/hit/reprefill 집계.
+- **스모크(tr, c=8, 16프로그램)** — **가설 즉시 확인**:
+  | GPU | KV usage peak | hit rate | pause | queries(재프리필) |
+  |-----|---------------|----------|-------|-------------------|
+  | **4090** | **0.98 (포화)** | 0.19 | **4** | 1.18M |
+  | **5090** | 0.80 | 0.63 | 0 | 0.42M |
+  → 작은 **4090이 먼저 KV 포화·스래싱(hit↓)·pause**, 5090은 여유. **§12 H1 실측 확인.**
+- **전체 스윕 실행 중**(background): tr→default, C=8·16·24·32·48 × 3회(30런), §9 합성 workload
+  (ctx=3000, turns=3, sleep=0.5, maxtok=96, nprog=48). 예상 ~45–60분. 출력: `homo_hetero_{tr,default}.jsonl`.
+
