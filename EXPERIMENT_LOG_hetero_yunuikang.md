@@ -376,3 +376,16 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 - ⏳ 그래프(`figures/hetero_homo_tracelab_*.png`)는 다음 단계에서 `plot_results_yunuikang.py`로 생성 예정.
 - 기대치("중고부하 tr 우위") 대비: **hit rate에서는 확실한 tr 우위, throughput/p95에서는 아님**(위 해석).
 
+### D-8. 스코프 변경 + D(TraceLab) 마무리 (2026-07-04)
+- **스코프 변경(사용자 지시)**: Phase C(SWE-bench 녹화)·D(SWE-bench)는 **보류(다음 미팅 이후)**.
+  이번 실행 순서 = **D(TraceLab) 마무리 → E(cross-node homo 풀 스윕) → F(homo-hetero, goguma6 5090)**.
+  - 계획서 `../EXPERIMENT_PLAN_hetero_yunuikang.md` 갱신함(Phase C·D 헤더에 보류 표기, 실행순서 갱신).
+    ⚠️ 단 계획서는 **git repo 밖**(상위 `yunuikang_work`, 비-git)이라 **커밋 불가** — 디스크 저장으로만 반영.
+- **D(TraceLab) 결과 확인**: default/tr 각 **18런**(C=2·4·8·16·32·48 × 3회), concurrency 전 구간 커버.
+  런당 실패 ~2/64 프로그램(경미, completed 62/64) — offered load 충분.
+- **그래프 생성**(3회 평균 집계 후): `plot_results_yunuikang.py`로
+  `figures/hetero_homo_tracelab_{throughput,p95_latency,hit_rate}.png` 3종.
+  - hit_rate 그래프가 핵심: **tr ~0.8 평탄 유지 vs default 급락(0.82→0.026)**.
+  - 집계 입력: `scratch/agg_tracelab_{tr,default}.jsonl`.
+- **→ Phase D(TraceLab) 완료.** (SWE-bench는 보류.) 다음: Phase E(cross-node homo).
+
