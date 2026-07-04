@@ -222,21 +222,29 @@ pic(s, "hetero_homo_tracelab_throughput.png", 7.0, 1.7, w=6.1)
 caption(s, Inches(7.0), Inches(6.1), "throughput vs concurrency", 6.35)
 
 # ---------------- 9. F result 1: global ----------------
-s = slide(); title(s, "F 결과 ① — 이종 4090+5090, 전역: tr이 2배")
+s = slide(); title(s, "F 결과 ① — 이종 4090+5090, 전역: tr이 throughput·p95 모두 우세")
 bullets(s, [
     (0, "합성 KV-압박 워크로드, 4090+5090"),
-    (1, "고부하 throughput tr≈2×, hit 0.67 vs 0.02", GREEN),
-    (0, "합성에선 이종에서도 tr이 명확히 우세 (실데이터 D와 대조)."),
-], left=0.55, top=1.35, width=5.4, height=1.6, size=15)
+    (1, "고부하 throughput tr≈2×, hit 0.67 vs 0.02, p95도 tr이 절반 이하(c48 70 vs 149s)", GREEN),
+    (0, "합성에선 이종에서도 tr 우세 (실데이터 D와 대조; D는 tr이 p95 열세였음)."),
+], left=0.55, top=1.3, width=5.5, height=1.6, size=14)
 dtable(s, [
     ["C", "thru tr", "thru def", "hit tr", "hit def"],
     ["8", "0.67", "0.62", "0.56", "0.23"],
     ["16", "0.64", "0.34", "0.67", "0.03"],
     ["32", "0.64", "0.35", "0.67", "0.03"],
     ["48", "0.64", "0.32", "0.67", "0.02"],
-], x=0.65, y=3.1, w=5.2, col_w=[0.8, 1.15, 1.15, 1.05, 1.05], size=13,
+], x=0.6, y=2.95, w=5.2, col_w=[0.8, 1.15, 1.15, 1.05, 1.05], size=12,
    hi={(2, 2), (3, 2), (4, 2), (2, 4), (3, 4), (4, 4)})
-caption(s, Inches(0.65), Inches(5.2), "전역 throughput(p/s)·hit (3회 평균)", 6.0)
+dtable(s, [
+    ["C", "p95 tr", "p95 def", "tr/def"],
+    ["8", "20.6s", "25.7s", "0.80×"],
+    ["16", "34.9s", "52.2s", "0.67×"],
+    ["32", "55.1s", "99.0s", "0.56×"],
+    ["48", "70.2s", "149.0s", "0.47×"],
+], x=0.6, y=4.85, w=5.2, col_w=[0.8, 1.25, 1.35, 1.1], size=12,
+   hi={(1, 3), (2, 3), (3, 3), (4, 3)})
+caption(s, Inches(0.6), Inches(5.2), "위=throughput·hit / 아래=p95 지연 (3회 평균)", 6.75)
 pic(s, "homo_hetero_throughput.png", 6.2, 1.75, w=6.9)
 
 # ---------------- 10. F result 2: per-backend (core) ----------------

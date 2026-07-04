@@ -123,14 +123,23 @@ def run_point(args, backends, proxy, C, rep) -> dict:
     sampler = Sampler(backends, proxy, interval=args.sample_interval)
     sampler.start()
     nprog = max(args.nprog, C)
-    cmd = [
-        "python", f"{REPO}/scripts/workload_driver_yunuikang.py",
-        "--base-url", proxy, "--router-url", proxy, "--backends", ",".join(urls),
-        "--concurrency", str(C), "--num-programs", str(nprog),
-        "--turns", str(args.turns), "--tool-sleep", str(args.tool_sleep),
-        "--max-tokens", str(args.max_tokens), "--ctx-tokens", str(args.ctx_tokens),
-        "--router", args.router,
-    ]
+    if args.trace:
+        # real-trace load source (trace_replay_driver); per-backend sampling identical
+        cmd = [
+            "python", f"{REPO}/scripts/trace_replay_driver_yunuikang.py",
+            "--trace", args.trace,
+            "--base-url", proxy, "--router-url", proxy, "--backends", ",".join(urls),
+            "--concurrency", str(C), "--num-programs", str(nprog), "--router", args.router,
+        ]
+    else:
+        cmd = [
+            "python", f"{REPO}/scripts/workload_driver_yunuikang.py",
+            "--base-url", proxy, "--router-url", proxy, "--backends", ",".join(urls),
+            "--concurrency", str(C), "--num-programs", str(nprog),
+            "--turns", str(args.turns), "--tool-sleep", str(args.tool_sleep),
+            "--max-tokens", str(args.max_tokens), "--ctx-tokens", str(args.ctx_tokens),
+            "--router", args.router,
+        ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     sampler.stop(); sampler.join(timeout=5)
     after = {lab: scrape_backend(url) for lab, url in backends.items()}
@@ -160,9 +169,10 @@ def run_point(args, backends, proxy, C, rep) -> dict:
         "latency_p95_s": drv.get("latency_p95_s"),
         "prefix_cache_hit_rate_global": drv.get("prefix_cache_hit_rate"),
         "per_backend": per_backend,
-        "workload": {"ctx_tokens": args.ctx_tokens, "turns": args.turns,
-                     "tool_sleep": args.tool_sleep, "max_tokens": args.max_tokens,
-                     "num_programs": max(args.nprog, C)},
+        "workload": ({"trace": args.trace, "num_programs": nprog} if args.trace else
+                     {"ctx_tokens": args.ctx_tokens, "turns": args.turns,
+                      "tool_sleep": args.tool_sleep, "max_tokens": args.max_tokens,
+                      "num_programs": nprog}),
     }
 
 
@@ -177,6 +187,9 @@ def main():
     ap.add_argument("--concurrencies", default="8 16 24 32 48")
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--nprog", type=int, default=48)
+    ap.add_argument("--trace", default="",
+                    help="if set, load source = trace_replay_driver with this canonical trace "
+                         "(real workload); otherwise synthetic workload_driver")
     # §9 KV-pressure synthetic workload defaults
     ap.add_argument("--ctx-tokens", type=int, default=3000)
     ap.add_argument("--turns", type=int, default=3)

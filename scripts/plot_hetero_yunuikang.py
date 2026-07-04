@@ -54,6 +54,14 @@ def main():
     ax.set_title("Throughput vs concurrency  —  4090+5090 hetero\n(higher = better)", fontsize=10)
     ax.grid(alpha=0.3); ax.legend(); save(fig, "throughput")
 
+    # 1b) global p95 latency tr vs default
+    fig, ax = plt.subplots(figsize=(6.2, 4.2))
+    ax.plot(cs, trs(lambda x: x["latency_p95_s"]), "o-", label="tr (ThunderAgent)", lw=2)
+    ax.plot(cs, dfs(lambda x: x["latency_p95_s"]), "s--", label="default", lw=2)
+    ax.set_xlabel("concurrency"); ax.set_ylabel("p95 latency (s)")
+    ax.set_title("p95 latency vs concurrency  —  4090+5090 hetero\n(lower = better)", fontsize=10)
+    ax.grid(alpha=0.3); ax.legend(); save(fig, "p95")
+
     # 2) per-backend hit rate (key panel): 4 lines
     fig, ax = plt.subplots(figsize=(6.6, 4.4))
     ax.plot(cs, trs(lambda x: x["per_backend"]["4090"]["hit_rate"] or 0), "o-", color="tab:blue", label="tr · 4090", lw=2)
