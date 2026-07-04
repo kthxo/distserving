@@ -453,3 +453,57 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 - **전체 스윕 실행 중**(background): tr→default, C=8·16·24·32·48 × 3회(30런), §9 합성 workload
   (ctx=3000, turns=3, sleep=0.5, maxtok=96, nprog=48). 예상 ~45–60분. 출력: `homo_hetero_{tr,default}.jsonl`.
 
+### F-2. ✅ Phase F 스윕 완료 + 결과·해석 (2026-07-04)
+- 두 스윕 각 **15런(5×3) 완료, 전 런 48/48 성공**. 출력: `scratch/homo_hetero_{tr,default}.jsonl`.
+
+**전역 (tr vs default, 3회 평균):**
+| C | thru tr/def | 전역 hit tr/def |
+|---|-------------|-----------------|
+| 8  | 0.67 / 0.62 | 0.56 / 0.23 |
+| 16 | 0.64 / 0.34 | 0.67 / 0.03 |
+| 24 | 0.63 / 0.32 | 0.67 / 0.02 |
+| 32 | 0.64 / 0.35 | 0.67 / 0.03 |
+| 48 | 0.64 / 0.32 | 0.67 / 0.02 |
+→ **tr이 고부하에서 throughput ~2배(0.64 vs 0.32), 전역 hit 0.67 vs 0.02.** (§9 homo 2×4090 tr~0.49
+대비 hetero+5090에서 tr~0.64, +31% — 큰 GPU 추가 효과.)
+
+**백엔드별 (핵심 — 4090 vs 5090):**
+| | tr 4090 | tr 5090 | default 4090 | default 5090 |
+|---|---------|---------|--------------|--------------|
+| KV usage peak (c≥16) | 0.99 | 0.96 | 0.99 | 0.96 |
+| hit rate (c≥16) | **0.67** | **0.67** | **0.02** | **0.02–0.05** |
+| hit rate (c=8) | 0.48 | 0.64 | **0.08** | 0.67 |
+| 재프리필 queries(M, c≥16) | 0.80 | 1.29 | **9.2** | 2.2 |
+
+**해석 (가설 검증 — H1은 예상과 다르게 나옴, 정직하게 기록):**
+- **default(naive)가 작은 4090을 파국적으로 혹사**: c=8에서 이미 4090 hit **0.08**(스래싱)인데 5090은 0.67
+  (여유). 고부하에선 4090 재프리필이 5090의 **~4배**(9.2M vs 2.2M). → "작은 GPU가 먼저·더 심하게
+  스래싱"하는 현상은 **default에서 발생**.
+- **tr은 두 GPU를 균형 유지**: 4090·5090 hit rate가 **둘 다 ~0.67로 수렴**(발산 안 함). 오히려 tr은
+  **큰 5090에 더 많이 라우팅**(queries 4090:5090 ≈ 0.8M:1.3M ≈ 1:1.6). pause도 저부하선 4090,
+  고부하선 5090에 소수 분산.
+- **⚠️ §12 H1 기각/수정**: H1은 "tr의 절대-토큰 균형 배분이 작은 4090을 먼저 포화시킨다"였으나,
+  실측상 tr의 4090·5090 hit rate가 **유사(≈0.67)** → §12-2에 미리 정한 **반증 조건**("tr에서 두 GPU
+  hit가 비슷하면 H1 기각/수정")에 해당. **tr은 H1이 우려한 소형-GPU 혹사를 하지 않는다.** 소형-GPU
+  혹사 병리는 **default의 문제**.
+- **수정된 연구 방향(시사점)**: tr split ≈ 1:1.6 vs 실제 용량비 1:2.03 → tr이 **큰 5090을 완전히는
+  활용 못 함**(throughput가 5090 추가 용량(+51%)만큼 오르지 않고 +31%에 그침). 즉 다음 과제는
+  "tr이 소형 GPU를 혹사한다"를 고치는 게 아니라 **대형 GPU의 여유를 더 적극 활용(용량 비례 배분으로
+  throughput 상단 끌어올리기)**. (약한 소형-GPU-우선 효과는 tr c=8에서만: 4090 hit 0.48 vs 5090 0.64.)
+
+**그래프**(`figures/`, 신규 `scripts/plot_hetero_yunuikang.py`):
+- `homo_hetero_perbackend_hitrate.png` — **핵심**: tr 4090·5090 둘 다 ~0.67 vs default 4090 즉시 붕괴.
+- `homo_hetero_throughput.png` — tr ~0.64 평탄 vs default 0.62→0.32 붕괴.
+- `homo_hetero_perbackend_reprefill.png` — default 4090 재프리필 폭증(9M).
+- `homo_hetero_perbackend_kv_usage.png` — 백엔드별 peak KV.
+
+**한계**: (1) 각 점 3회(반복 간 편차 존재, 특히 tr pause 타이밍). (2) 합성 §9 workload(실제 분포와 다름).
+(3) split을 queries(재프리필 포함)로 근사 — 순수 라우팅 프로그램 수와는 다름.
+
+### F-3. Phase F AC 상태
+- ✅ 백엔드별 KV사용률·split·pause·hit rate 수집(양쪽 GPU 따로). tr/default 비교 곡선·그래프 확보.
+- ✅ 양쪽 실제 KV 풀 기록: 4090=43,888 / 5090=89,040 tokens (2.03×).
+- ✅ 가설 검증: H1은 반증(수정) — 소형-GPU 혹사는 default 병리, tr은 균형 유지·대형 GPU 과소활용.
+  → **용량 비례 라우팅의 근거는 "tr의 대형 GPU 활용 개선" 방향으로 재정의.**
+- **→ Phase F 완료.** (이번 스코프 D(TraceLab)+F 종료. C·D(SWE)·E는 보류.)
+
