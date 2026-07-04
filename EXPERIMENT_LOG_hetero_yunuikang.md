@@ -507,3 +507,44 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
   → **용량 비례 라우팅의 근거는 "tr의 대형 GPU 활용 개선" 방향으로 재정의.**
 - **→ Phase F 완료.** (이번 스코프 D(TraceLab)+F 종료. C·D(SWE)·E는 보류.)
 
+---
+
+## Phase D-char — TraceLab 워크로드 characterization (§10 방식, 미팅덱용) (2026-07-04)
+
+> homo-homo §10과 동일 방식으로 TraceLab 실제 워크로드 특성을 뽑아 D 결과의 **원인**을 설명.
+> 각 항목에 homo-homo 합성(§10) 비교값 병기. 그래프: `figures/char_tracelab_*.png`.
+
+### 재료·방법
+- 정적(서버 불필요): `tracelab_fit32k.jsonl`(982세션/6,107턴)에서 토큰·tool·KV 분포.
+- 프로파일(c=1 측정): 첫 25세션 zero-tool 복사본(`tracelab_char25_notool.jsonl`)을 **4090(mango1:8000)
+  직접, `--stream`** 로 c=1 재생 → per-turn TTFT(prefill)/decode 측정(`char_tracelab_c1.trace.jsonl`,
+  24/25 완료, 1건 400=누적 컨텍스트 초과). §10처럼 vLLM이 요청별 prefill/decode 미제공 → 클라이언트
+  스트리밍 TTFT로 근사. **lifetime = 측정 compute(turn_latency) + 원본 trace의 tool_duration 재합산**
+  (profiling 시간 단축 위해 tool sleep은 측정 중 제거, tool은 분석에서 다시 더함 — 방식 명시).
+
+### 결과 (TraceLab vs homo-homo 합성 §10)
+| 특성 | TraceLab (실측) | homo-homo 합성 §10 |
+|------|-----------------|--------------------|
+| input tokens/turn | median **18,275**, p95 29,212 | ~14,558 (균일) |
+| output tokens/turn | median **144**, p95 1,387, max 14,641 | ~28.6 (거의 고정) |
+| tool time/turn | median 0.047s, **p95 30s**(cap) | 0.4s (설계값) |
+| 프로그램 peak KV | median **2.87 GiB**, p95 4.35, max 4.50 | ~2.01 GiB |
+| 프로그램 lifetime(c=1) | median **34.6s**, p95 150, max 173 | ~63.8s (c=8) |
+| turn0 prefill(cold) | **1.89s** | 1.82s |
+| warm prefill(turn>0) | 0.40s | 0.13s |
+| decode(median) | 1.16s | ~0.5s |
+
+### 해석 (D 결과와의 인과)
+- **prefill-heavy**: 입력 18k ≫ 출력 144(median). 비용은 prefill/KV에 집중 → KV locality가 결정적.
+  (단 출력 꼬리가 큼: max 14,641 토큰 → 일부 turn은 decode가 지배.)
+- **KV 그래프가 D 결과의 원인**: 프로그램 1개가 **2.87 GiB(median)** → **4090 풀(6.03 GiB)에 ~2.1개**,
+  5090(12.23)에 ~4.3개만 적재. → §D-6에서 tr이 pause로 병렬성을 희생한 이유(프로그램이 KV에 육박)를
+  워크로드 수준에서 정량 설명. 합성(2.01 GiB)보다 크고 **가변적**이라 실제 KV 압박이 더 불균일.
+- **turn0만 cold prefill(1.89s), 이후 warm(0.40s)**: 세션 내 prefix 재사용(KV locality) 실측 —
+  homo §10과 동일 패턴(warm이 §10 0.13s보다 큰 건 실제 turn당 신규 토큰이 더 많기 때문).
+
+### 산출물
+- 그래프: `figures/char_tracelab_{tokens,kv,lifetime,turn_breakdown}.png`
+- 스크립트: `scripts/plot_char_tracelab_yunuikang.py`
+- 원시: `scratch/char_tracelab_c1.trace.jsonl`(per-turn), `scratch/char_tracelab_c1.summary.jsonl`
+
