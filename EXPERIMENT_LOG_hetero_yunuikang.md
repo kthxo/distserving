@@ -407,3 +407,29 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
 - **대기 항목(사용자 보고)**: (1) mango3 드라이버/CUDA 버전, (2) `/home` 공유 여부(venv 보임?),
   (3) 기동 후 `GPU KV cache size: N tokens` 로그 + `/health` OK.
 
+### E-drop. 🔸 Phase E 제외 (2026-07-04, 스코프 재변경)
+- 사용자 지시로 **Phase E(cross-node homo)도 이번엔 제외(보류, 다음 미팅 이후)**. mango3 기동은 진행 안 함.
+- 계획서 순서 재갱신: **D(TraceLab) 완료 → F(goguma6 5090)**. (계획서 파일 수정함, git 밖이라 커밋 불가.)
+
+---
+
+## Phase F — homo-hetero (mango1 4090 + goguma6 5090, 실제) — 시작 (2026-07-04)
+
+- **목적**: 바뀌는 변수는 **GPU 용량뿐**(데이터=합성, homo-homo와 동일). 4090+5090 이종에서 tr의
+  절대-토큰 균형 배분이 작은 4090을 먼저 포화시키는지(§12 H1) 정량 확인.
+- **노드 IP**: mango1=`143.248.53.25`(4090), goguma6=`143.248.53.112`(5090, Blackwell).
+- **접근 (b)**: goguma6는 **/home 비공유 + SSH 키 없음** → 사용자가 goguma6에 직접 붙어 세팅/기동.
+  Claude는 goguma6 셋업 스크립트 제공 + mango1 쪽(백엔드·프록시·스윕) 담당.
+- **토폴로지**: mango1:8000(4090, `--host 0.0.0.0`, 이미 기동 중) + goguma6:8000(5090).
+  프록시(mango1:9000) `--backends http://143.248.53.25:8000,http://143.248.53.112:8000`.
+
+### F-0. goguma6 셋업 스크립트 제공 → 사용자 실행 대기
+- **신규 파일**: `scripts/setup_goguma6_yunuikang.sh` — /home 비공유 별도 노드용 from-scratch:
+  uv 설치 → standalone Python 3.12(헤더 포함) → venv → `uv pip install vllm --torch-backend=auto`
+  → env 우회(CPATH=sysconfig include, FLASH_ATTN, flashinfer sampler off) → 모델 다운로드 →
+  `vllm serve --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.92`.
+- **Blackwell(sm_120) 리스크**: vLLM 0.24.0/torch cu13이 5090 커널을 포함해야 함. 안 뜨면 삽질 금지 —
+  스크립트 하단 "IF IT FAILS" grep 결과를 받아 우회(다른 attention backend / 최신 vLLM 등) 정리 후 멈춤.
+- **대기 항목(사용자 보고)**: goguma6 nvidia-smi CUDA 버전, torch/vllm import 성공 여부,
+  기동 시 `GPU KV cache size: N tokens`(5090 실측 — §10-4 추정 ~97k 검증), `/health` OK.
+
