@@ -85,6 +85,29 @@ def pic(s, name, x, y, w=None, h=None):
     return s.shapes.add_picture(os.path.join(FIG, name), Inches(x), Inches(y), **kw)
 
 
+def dtable(s, rows, x, y, w, col_w, size=11, rowh=0.32, hi=None):
+    """Compact data table. rows[0]=header. hi = set of (ri,ci) cells to color RED."""
+    nr, nc = len(rows), len(rows[0])
+    tb = s.shapes.add_table(nr, nc, Inches(x), Inches(y), Inches(w), Inches(rowh * nr)).table
+    tb.first_row = False; tb.horz_banding = False
+    for ci, cw in enumerate(col_w):
+        tb.columns[ci].width = Inches(cw)
+    for ri in range(nr):
+        for ci in range(nc):
+            cell = tb.cell(ri, ci); cell.margin_top = Pt(1); cell.margin_bottom = Pt(1)
+            cell.text_frame.clear()
+            p = cell.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+            run = p.add_run(); run.text = str(rows[ri][ci]); run.font.size = Pt(size)
+            if ri == 0:
+                run.font.bold = True; run.font.color.rgb = WHITE
+                cell.fill.solid(); cell.fill.fore_color.rgb = NAVY
+            else:
+                cell.fill.solid(); cell.fill.fore_color.rgb = WHITE
+                run.font.color.rgb = RED if (hi and (ri, ci) in hi) else NAVY
+                run.font.bold = bool(hi and (ri, ci) in hi)
+    return tb
+
+
 # ---------------- 1. Title ----------------
 s = slide()
 band = s.shapes.add_shape(1, 0, Inches(2.2), SW, Inches(3.0))
@@ -165,59 +188,90 @@ caption(s, Inches(3.35), Inches(6.6), "프로그램별 peak KV vs 4090/5090 풀 
 s = slide(); title(s, "D 결과 ① — KV hit rate: tr이 캐시를 지킨다 (실데이터 재현)")
 bullets(s, [
     (0, "실제 TraceLab × 2×4090"),
-    (1, "tr: hit rate 0.77~0.80 부하 무관 유지"),
-    (1, "default: 0.82 → 0.026 붕괴", RED),
-    (1, "c=48에서 30× 차이", GREEN),
-    (0, "논문 핵심 주장(program-aware 스케줄링이 스래싱을 막는다)을 합성이 아닌 실데이터로 재현."),
-], left=0.6, top=1.4, width=5.2, height=5.0, size=16)
-pic(s, "hetero_homo_tracelab_hit_rate.png", 6.0, 1.7, w=7.0)
+    (1, "tr: 0.77~0.80 부하 무관 유지  |  default: 0.82 → 0.026 붕괴", NAVY),
+    (1, "c=48에서 30× 차이 → 스래싱 억제 실데이터 재현", GREEN),
+], left=0.55, top=1.35, width=5.4, height=1.6, size=15)
+dtable(s, [
+    ["C", "tr hit", "default hit"],
+    ["2", "0.823", "0.823"],
+    ["8", "0.800", "0.210"],
+    ["16", "0.799", "0.047"],
+    ["32", "0.774", "0.032"],
+    ["48", "0.772", "0.026"],
+], x=0.7, y=3.1, w=4.6, col_w=[1.2, 1.7, 1.7], size=13,
+   hi={(3, 2), (4, 2), (5, 2)})
+caption(s, Inches(0.7), Inches(4.6), "KV hit rate (3회 평균)", 6.05)
+pic(s, "hetero_homo_tracelab_hit_rate.png", 5.9, 1.75, w=7.1)
 
 # ---------------- 8. D result 2: the reversal ----------------
 s = slide(); title(s, "D 결과 ② — 반전: throughput·p95는 tr이 불리")
 bullets(s, [
-    (0, "같은 실험에서 throughput/latency는 default가 더 좋다:"),
-    (1, "c=48: throughput tr 0.067 vs default 0.102  /  p95 727s vs 481s", RED),
-    (0, "원인 = 슬라이드 6 (프로그램이 4090 KV에 육박, ~2개만 적재)"),
-    (1, "tr은 용량 초과분을 pause/queue → 캐시는 지키나 병렬성 희생 (closed-loop이라 대기)"),
-    (1, "default는 캐시를 갈아엎지만(reprefill↑) 병렬성 유지 → wall-clock throughput↑"),
-    (0, "합성 §9(tr +57%)와 정반대. → tr 이득은 '프로그램/KV 비율'에 좌우됨.", NAVY),
-], left=0.6, top=1.4, width=6.0, height=5.2, size=15)
-pic(s, "hetero_homo_tracelab_throughput.png", 6.8, 1.55, w=6.3)
-caption(s, Inches(6.8), Inches(6.3), "throughput vs concurrency (tr vs default)", 6.55)
+    (0, "같은 실험인데 throughput/latency는 default가 더 좋다 (반전):"),
+    (1, "원인=슬6: 프로그램이 4090 KV에 육박(~2개). tr은 초과분 pause→병렬성 희생, default는 스래싱하며 다 돌림", NAVY),
+    (0, "합성 §9(tr +57%)와 정반대 → tr 이득은 '프로그램/KV 비율'에 좌우됨.", NAVY),
+], left=0.55, top=1.35, width=6.1, height=1.9, size=14)
+dtable(s, [
+    ["C", "thru tr", "thru def", "p95 tr", "p95 def"],
+    ["8", "0.078", "0.120", "184s", "153s"],
+    ["16", "0.073", "0.107", "595s", "289s"],
+    ["48", "0.067", "0.102", "727s", "481s"],
+], x=0.6, y=3.5, w=6.1, col_w=[0.9, 1.3, 1.3, 1.3, 1.3], size=13,
+   hi={(1, 1), (2, 1), (3, 1), (1, 3), (2, 3), (3, 3)})
+caption(s, Inches(0.6), Inches(6.1), "throughput(p/s)·p95 — tr(빨강)이 열세", 5.55)
+pic(s, "hetero_homo_tracelab_throughput.png", 7.0, 1.7, w=6.1)
+caption(s, Inches(7.0), Inches(6.1), "throughput vs concurrency", 6.35)
 
 # ---------------- 9. F result 1: global ----------------
 s = slide(); title(s, "F 결과 ① — 이종 4090+5090, 전역: tr이 2배")
 bullets(s, [
     (0, "합성 KV-압박 워크로드, 4090+5090"),
-    (1, "고부하 throughput: tr 0.64 vs default 0.32 (≈2×)", GREEN),
-    (1, "전역 hit rate: 0.67 vs 0.02"),
-    (0, "합성 워크로드에선 이종에서도 tr이 명확히 우세 (D의 실데이터와 대조)."),
-], left=0.6, top=1.4, width=5.2, height=4.6, size=16)
-pic(s, "homo_hetero_throughput.png", 6.0, 1.7, w=7.0)
+    (1, "고부하 throughput tr≈2×, hit 0.67 vs 0.02", GREEN),
+    (0, "합성에선 이종에서도 tr이 명확히 우세 (실데이터 D와 대조)."),
+], left=0.55, top=1.35, width=5.4, height=1.6, size=15)
+dtable(s, [
+    ["C", "thru tr", "thru def", "hit tr", "hit def"],
+    ["8", "0.67", "0.62", "0.56", "0.23"],
+    ["16", "0.64", "0.34", "0.67", "0.03"],
+    ["32", "0.64", "0.35", "0.67", "0.03"],
+    ["48", "0.64", "0.32", "0.67", "0.02"],
+], x=0.65, y=3.1, w=5.2, col_w=[0.8, 1.15, 1.15, 1.05, 1.05], size=13,
+   hi={(2, 2), (3, 2), (4, 2), (2, 4), (3, 4), (4, 4)})
+caption(s, Inches(0.65), Inches(5.2), "전역 throughput(p/s)·hit (3회 평균)", 6.0)
+pic(s, "homo_hetero_throughput.png", 6.2, 1.75, w=6.9)
 
 # ---------------- 10. F result 2: per-backend (core) ----------------
 s = slide(); title(s, "F 결과 ② — 백엔드별 (핵심): 누가 스래싱하나")
 bullets(s, [
-    (0, "default가 작은 4090을 혹사한다:"),
-    (1, "c=8: 4090 hit 0.08 (스래싱) vs 5090 0.67", RED),
-    (1, "재프리필 4090 9.2M vs 5090 2.2M (~4×)", RED),
-    (0, "tr은 두 GPU를 균형 유지:"),
-    (1, "4090·5090 hit 둘 다 ~0.67, 큰 5090에 더 라우팅 (q 1:1.6)", GREEN),
-], left=0.55, top=1.4, width=5.0, height=5.0, size=15)
-pic(s, "homo_hetero_perbackend_hitrate.png", 5.65, 1.55, w=7.4)
-caption(s, Inches(5.65), Inches(7.4), "백엔드별 hit rate: default 4090 붕괴 vs tr 균형", 6.55)
+    (0, "default가 작은 4090을 혹사 (c8 hit 0.08, 재프리필 ~4×)", RED),
+    (0, "tr은 4090·5090 둘 다 ~0.67 균형, 큰 5090에 더 라우팅(1:1.6)", GREEN),
+], left=0.55, top=1.35, width=5.6, height=1.3, size=14)
+dtable(s, [
+    ["지표", "tr 4090", "tr 5090", "def 4090", "def 5090"],
+    ["hit (c=8)", "0.48", "0.64", "0.08", "0.67"],
+    ["hit (c≥16)", "0.67", "0.67", "0.02", "0.02"],
+    ["재프리필 M (c≥16)", "0.80", "1.29", "9.2", "2.2"],
+], x=0.5, y=2.85, w=5.7, col_w=[1.7, 1.0, 1.0, 1.0, 1.0], size=12,
+   hi={(1, 3), (2, 3), (3, 3)})
+caption(s, Inches(0.5), Inches(5.7), "백엔드별 수치 (빨강=default 4090, 혹사)", 4.55)
+pic(s, "homo_hetero_perbackend_hitrate.png", 6.35, 2.1, w=6.7)
+caption(s, Inches(6.35), Inches(6.7), "백엔드별 hit rate: default 4090만 붕괴", 6.5)
 
 # ---------------- 11. F result 3: hypothesis ----------------
 s = slide(); title(s, "F 결과 ③ — 가설 검증: H1 반증")
 bullets(s, [
-    (0, "사전 가설 H1: 'tr의 절대-토큰 균형 배분이 작은 4090을 먼저 포화시킨다'"),
-    (0, "실측: tr의 4090·5090 hit rate가 유사(≈0.67) → 사전 등록한 반증 조건 충족", RED),
-    (1, "즉 tr은 소형 GPU를 혹사하지 않는다. 소형-GPU 혹사 병리는 default의 문제.", NAVY),
-    (0, "재해석: tr split ≈ 1:1.6 < 실제 용량비 1:2.03 → 큰 5090을 완전히 활용 못 함", NAVY),
-    (1, "throughput가 5090 추가 용량(+51%)만큼 안 오르고 +31%에 그침 (vs 2×4090 §9 tr).", GRAY),
-], left=0.55, top=1.4, width=6.0, height=5.2, size=15)
-pic(s, "homo_hetero_perbackend_reprefill.png", 6.95, 1.9, w=6.2)
-caption(s, Inches(6.95), Inches(6.2), "백엔드별 재프리필: default 4090이 5090의 ~4배", 6.35)
+    (0, "사전 가설 H1: 'tr의 절대-토큰 균형이 작은 4090을 먼저 포화'"),
+    (0, "실측: tr 4090·5090 hit 유사(≈0.67) → 사전 등록 반증 조건 충족 → H1 기각", RED),
+    (1, "소형-GPU 혹사는 default 병리. 단 tr은 큰 5090을 다 못 씀 ↓", NAVY),
+], left=0.55, top=1.35, width=6.1, height=1.7, size=14)
+dtable(s, [
+    ["", "4090", "5090", "비율"],
+    ["KV 풀 (GiB)", "6.03", "12.23", "1 : 2.03"],
+    ["tr split (q, M)", "0.80", "1.29", "1 : 1.6"],
+], x=0.6, y=3.3, w=6.0, col_w=[1.9, 1.2, 1.2, 1.7], size=13,
+   hi={(2, 3)})
+caption(s, Inches(0.6), Inches(4.55), "tr split(1:1.6) < 용량비(1:2.03) → 5090 과소활용", 4.35)
+pic(s, "homo_hetero_perbackend_reprefill.png", 7.05, 1.85, w=6.0)
+caption(s, Inches(7.05), Inches(6.0), "백엔드별 재프리필: default 4090이 ~4배", 6.2)
 
 # ---------------- 12. Comparison table ----------------
 s = slide(); title(s, "종합: 언제 tr이 이기고 지는가 (homo-homo vs D vs F)")
