@@ -389,3 +389,21 @@ NPROG=64 REPEAT=3 TAG=tracelab bash scripts/run_trace_sweep_yunuikang.sh tr     
   - 집계 입력: `scratch/agg_tracelab_{tr,default}.jsonl`.
 - **→ Phase D(TraceLab) 완료.** (SWE-bench는 보류.) 다음: Phase E(cross-node homo).
 
+---
+
+## Phase E — cross-node homo (mango1 + mango3, 둘 다 4090) — 시작 (2026-07-04)
+
+- **목적**: GPU 이종 전에 **네트워크 축만** 격리 검증. GPU 동일(4090+4090), 서버만 분리.
+- **노드 IP**(사용자 제공): mango1=`143.248.53.25`, mango3=`143.248.53.58`, goguma6=`143.248.53.112`.
+- **접근 방식 (b)**: mango1→mango3 SSH 키 세팅 안 함. **사용자가 mango3에 직접 SSH해 vLLM 기동**,
+  Claude는 mango3 실행 명령을 출력 + mango1 쪽(프록시·스윕·RTT)만 담당.
+- **토폴로지**: 노드당 vLLM 1개 — mango1:8000(GPU0, 이미 기동 중 재사용) + mango3:8000.
+  프록시(mango1:9000) `--backends http://143.248.53.25:8000,http://143.248.53.58:8000`.
+
+### E-0. mango3 실행 명령 출력 → 사용자 실행 대기
+- mango3에 낸 명령: env 우회 4줄 + `vllm serve --host 0.0.0.0 --port 8000 --max-model-len 32768
+  --gpu-memory-utilization 0.92` (아래 대화에 전문). **전제**: mango3에 `/home` 공유(venv/repo/모델
+  동일 경로) + 드라이버 CUDA13(≥580). 사용자가 `/home` 공유 여부 확인해서 알려주기로 함.
+- **대기 항목(사용자 보고)**: (1) mango3 드라이버/CUDA 버전, (2) `/home` 공유 여부(venv 보임?),
+  (3) 기동 후 `GPU KV cache size: N tokens` 로그 + `/health` OK.
+
