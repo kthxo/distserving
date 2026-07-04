@@ -643,3 +643,10 @@ tr 균형 vs default 4090 최악 붕괴), perbackend_reprefill, perbackend_kv_us
 - **한계**: 각 점 3회(편차 있음), split=queries 근사, fit32k 짧은세션 편향(동일).
 - **→ Phase G 완료. 이번 스코프의 2×2 4칸 모두 채움**(C·D-SWE·E는 보류 유지).
 
+### G-3. 덱에 Phase G 반영 (2026-07-04)
+- 덱 **14→16슬라이드**: G① (throughput 회복 vs D: D tr→G tr 표 + 전역 hit 그래프),
+  G② (백엔드별 + 세 방향 결론: hit 표 + perbackend_hitrate 그래프) 2장을 F 뒤에 삽입.
+- **슬라이드 2·14를 2×2 매트릭스로 갱신**: 슬2 "D+F+G — 2×2 4칸 완성", 슬14를 (데이터 × GPU) 3×3
+  매트릭스 표(§9 +57% / F +100% / D −34% / G −8% 회복, hit 4칸 압승)로 교체.
+- 발표자 노트 16개(신규 G① G② + 2×2 종합 노트 갱신). 검증: 16슬라이드/16노트/overflow·겹침 0.
+

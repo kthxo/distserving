@@ -131,8 +131,8 @@ bullets(s, [
     (0, "ThunderAgent = program-aware KV 캐시 스케줄링 (router tr) vs naive 프록시 (default)"),
     (1, "에이전트 프로그램마다 KV를 sticky하게 유지 → 용량 초과 시 pause/resume으로 스래싱 억제 (핵심 주장)"),
     (0, "연구 지형: 2×2 (데이터 × GPU)"),
-    (1, "✅ 완료: homo-homo (합성 × 2×4090)  —  기존 §7·§9·§10"),
-    (1, "★ 이번: D(실제 TraceLab × 2×4090) + F(합성 × 4090+5090 이종)", GREEN),
+    (1, "✅ homo-homo (합성 × 2×4090) — 기존 §7·§9·§10"),
+    (1, "★ 이번: D(실TraceLab×2×4090) + F(합성×이종) + G(실TraceLab×이종) — 2×2 4칸 완성", GREEN),
     (1, "🔸 보류(다음 미팅): C·D(SWE-bench 녹화), E(cross-node homo)", GRAY),
     (0, "질문: 실제 데이터·이종 GPU에서 tr의 이득이 유지되는가? 어디서 이기고 어디서 지는가?"),
 ])
@@ -278,32 +278,68 @@ caption(s, Inches(0.6), Inches(4.55), "tr split(1:1.6) < 용량비(1:2.03) → 5
 pic(s, "homo_hetero_perbackend_reprefill.png", 7.05, 1.85, w=6.0)
 caption(s, Inches(7.05), Inches(6.0), "백엔드별 재프리필: default 4090이 ~4배", 6.2)
 
-# ---------------- 12. Comparison table ----------------
-s = slide(); title(s, "종합: 언제 tr이 이기고 지는가 (homo-homo vs D vs F)")
-rows = [
-    ["실험", "워크로드 / HW", "tr throughput 이득", "tr KV hit 이득"],
-    ["homo-homo §9 (합성)", "합성 KV압박 / 2×4090", "+57% (0.49 vs 0.30)", "0.67 vs 0.02 (압승)"],
-    ["D (실데이터)", "TraceLab / 2×4090", "−34% (0.067 vs 0.102)", "0.77 vs 0.026 (압승)"],
-    ["F (이종)", "합성 / 4090+5090", "+100% (0.64 vs 0.32)", "0.67 vs 0.02 (압승)"],
+# ---------------- 12. G result 1: recovery vs D ----------------
+s = slide(); title(s, "G 결과 ① — 실 TraceLab × 이종: tr throughput 회복 (vs D)")
+bullets(s, [
+    (0, "실데이터를 4090+5090으로: D(2×4090)에서 tr이 잃은 throughput이 회복되나?"),
+    (1, "tr throughput D 대비 1.6~1.7× 회복 (D 0.067~0.078 → G 0.115~0.126)", GREEN),
+    (1, "default와 격차 34%→8%로 축소(c48) — 단 완전 역전은 아님", NAVY),
+    (0, "hit rate는 tr 압승 유지(0.68~0.83 vs 0.03). p95는 tr 여전히 열세(D 패턴)."),
+], left=0.55, top=1.3, width=6.3, height=2.0, size=14)
+dtable(s, [
+    ["C", "D tr", "G tr", "G def", "hit tr", "hit def"],
+    ["8", "0.078", "0.126", "0.154", "0.77", "0.39"],
+    ["16", "0.073", "0.116", "0.143", "0.74", "0.07"],
+    ["32", "0.069", "0.116", "0.132", "0.73", "0.03"],
+    ["48", "0.067", "0.115", "0.125", "0.68", "0.03"],
+], x=0.5, y=3.5, w=6.3, col_w=[0.7, 1.1, 1.1, 1.1, 1.15, 1.15], size=12, rowh=0.30,
+   hi={(1, 5), (2, 5), (3, 5), (4, 5)})
+caption(s, Inches(0.5), Inches(6.3), "throughput D tr→G tr 회복 / default hit 붕괴(빨강)", 5.2)
+pic(s, "hetero_hetero_hitrate.png", 7.1, 1.7, w=6.0)
+caption(s, Inches(7.1), Inches(6.0), "G 전역 hit rate: tr 유지 vs default 붕괴", 6.35)
+
+# ---------------- 13. G result 2: per-backend + three-way ----------------
+s = slide(); title(s, "G 결과 ② — 백엔드별 + 세 방향 결론")
+bullets(s, [
+    (0, "F 패턴이 실데이터에서도 유지:"),
+    (1, "default가 작은 4090 최악 붕괴 (c48 4090 hit 0.03 vs 5090 0.06)", RED),
+    (1, "tr은 4090·5090 균형 (둘 다 ~0.67~0.87)", GREEN),
+    (0, "단 tr split ~1:1 ≪ 용량비 1:2.03 → 실데이터에서 5090 과소활용 (F 1:1.6보다 큼)", NAVY),
+    (1, "그럼에도 throughput +72%(용량 +51% 대비 초선형) → 용량 비례로 5090 더 쓰면 상단↑", NAVY),
+], left=0.55, top=1.3, width=5.7, height=2.7, size=14)
+dtable(s, [
+    ["hit (c=48)", "tr", "default"],
+    ["4090", "0.69", "0.03"],
+    ["5090", "0.67", "0.06"],
+], x=0.6, y=4.5, w=4.4, col_w=[1.6, 1.4, 1.4], size=13, rowh=0.32, hi={(1, 2), (2, 2)})
+caption(s, Inches(0.6), Inches(4.4), "백엔드별 hit (c=48): default 4090 최악 붕괴", 5.55)
+pic(s, "hetero_hetero_perbackend_hitrate.png", 6.35, 2.0, w=6.8)
+caption(s, Inches(6.35), Inches(6.8), "tr 균형 vs default 4090 최악 붕괴", 6.6)
+
+# ---------------- 14. Comparison table (2x2) ----------------
+s = slide(); title(s, "종합: 2×2 매트릭스 (데이터 × GPU) — 4칸 완성")
+M = [
+    ["", "2×4090 (homo GPU)", "4090+5090 (hetero GPU)"],
+    ["합성 데이터", "§9: tr thru +57% · hit 압승", "F: tr thru +100% · hit·p95 우위"],
+    ["실제 TraceLab", "D: tr thru −34% · hit 압승(30×)", "G: tr thru −8%(회복) · hit 압승"],
 ]
-tb = s.shapes.add_table(len(rows), 4, Inches(0.6), Inches(1.5), Inches(12.1), Inches(2.6)).table
-tb.columns[0].width = Inches(2.7); tb.columns[1].width = Inches(3.2)
-tb.columns[2].width = Inches(3.4); tb.columns[3].width = Inches(2.8)
-for ci in range(4):
-    for ri in range(len(rows)):
-        cell = tb.cell(ri, ci); cell.text = rows[ri][ci]
-        para = cell.text_frame.paragraphs[0]
-        para.runs[0].font.size = Pt(13)
-        if ri == 0:
-            para.runs[0].font.bold = True; para.runs[0].font.color.rgb = WHITE
+tb = s.shapes.add_table(3, 3, Inches(0.7), Inches(1.65), Inches(11.9), Inches(2.3)).table
+tb.columns[0].width = Inches(2.5); tb.columns[1].width = Inches(4.5); tb.columns[2].width = Inches(4.9)
+for ri in range(3):
+    for ci in range(3):
+        cell = tb.cell(ri, ci); cell.text_frame.clear()
+        p = cell.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+        run = p.add_run(); run.text = M[ri][ci]; run.font.size = Pt(14)
+        if ri == 0 or ci == 0:
+            run.font.bold = True; run.font.color.rgb = WHITE
             cell.fill.solid(); cell.fill.fore_color.rgb = NAVY
         else:
-            para.runs[0].font.color.rgb = NAVY
+            cell.fill.solid(); cell.fill.fore_color.rgb = WHITE; run.font.color.rgb = NAVY
 bullets(s, [
-    (0, "KV hit rate: tr은 세 경우 모두 압승 (스래싱 억제는 견고)."),
-    (0, "Throughput: 프로그램이 KV에 육박하면(D) tr이 지고, 여유·이종이면(§9·F) tr이 이긴다."),
-    (1, "→ tr의 이득은 '프로그램/KV 비율'과 'GPU 용량 구성'에 좌우된다.", NAVY),
-], top=4.35, height=2.3, size=16)
+    (0, "KV hit rate: tr은 4칸 모두 압승 (스래싱 억제 견고)."),
+    (0, "Throughput: 프로그램이 KV에 육박하는 실데이터(D)에선 tr이 지고, 여유·이종이면 이기거나 회복(§9·F·G)."),
+    (1, "→ tr 이득은 '프로그램/KV 비율'·'GPU 용량'에 좌우. 이종 5090이 실데이터 적자를 34%→8%로 축소.", NAVY),
+], top=4.5, height=2.3, size=15)
 
 # ---------------- 13. Implication / next ----------------
 s = slide(); title(s, "시사점 · 다음 방향")
@@ -344,8 +380,8 @@ NOTES = [
     "있습니다. 그러면 다음 턴에 그 문맥을 처음부터 다시 계산해야 하는데, 이걸 재프리필, 이게 심해지는 "
     "걸 스래싱이라고 부릅니다. tr 라우터는 프로그램 단위로 관리해서 활성 프로그램들의 KV가 GPU 용량 "
     "안에 들어오도록 유지하고, 초과하면 잠시 멈췄다 재개시켜 이 스래싱을 막습니다. 저희는 이걸 데이터 축"
-    "(합성 대 실제)과 GPU 축(동일 대 이종) 둘로 나눠 봤고, 오늘은 실제 데이터(D)와 이종 GPU(F) 칸을 "
-    "채운 겁니다.",
+    "(합성 대 실제)과 GPU 축(동일 대 이종) 둘로 나눠 봤고, 오늘은 나머지 세 칸(D·F·G)을 채워 "
+    "2×2 매트릭스를 완성한 겁니다.",
     # 3 method
     "셋업입니다. GPU는 4090과 5090을 쓰는데, 실제 KV 캐시 풀 크기를 vLLM 로그에서 뽑아보니 4090은 "
     "43,888토큰으로 6.03기가바이트, 5090은 89,040토큰 12.23기가바이트로 딱 2.03배였습니다. 이 2배 "
@@ -404,12 +440,24 @@ NOTES = [
     "가설은 기각·수정됐습니다. 우리가 걱정했던 tr의 문제는 실제로 없었고, 소형 GPU를 혹사시키는 건 오히려 "
     "default의 병리였던 거죠. 예상 질문 '그럼 tr이 완벽하냐?'—아닙니다. tr은 큰 GPU를 다 활용하진 못하는데 "
     "그게 다음 슬라이드입니다.",
-    # 12 comparison table
-    "세 실험을 나란히 놓고 배운 걸 정리합니다. 합성에 동일 GPU였던 기존 실험에선 tr이 처리량 +57%로 이겼고, "
-    "실제 데이터에 동일 GPU였던 D에선 tr이 -34%로 졌고, 합성에 이종 GPU였던 F에선 tr이 +100%로 이겼습니다. "
-    "그런데 KV 히트율은 세 경우 모두 tr이 압승입니다. 그러니까 tr의 스래싱 억제 능력 자체는 항상 견고한데, "
-    "그게 처리량 이득으로 연결되느냐는 프로그램이 GPU KV에 얼마나 육박하는지, 그리고 GPU 용량 구성이 어떤지에 "
-    "달려 있다—이게 오늘의 핵심 교훈입니다.",
+    # 12 G1 recovery vs D
+    "이제 2×2의 마지막 칸입니다. 실제 TraceLab 데이터를 4090과 5090 이종에서 돌렸어요. 핵심 질문은, D에서 "
+    "tr이 잃었던 처리량이 더 큰 5090을 붙이면 회복되느냐였습니다. 결과는 회복됩니다—tr 처리량이 D 대비 1.6에서 "
+    "1.7배로 올랐고(0.067→0.115), default와의 격차도 34%에서 8%로 좁혀졌습니다. 다만 완전히 역전하진 못했고, "
+    "히트율은 여전히 tr 압승(0.68~0.83 대 0.03), p95는 tr이 조금 열세입니다. 즉 큰 GPU가 tr의 실데이터 약점을 "
+    "상당히 메워줬다는 게 이 칸의 메시지입니다.",
+    # 13 G2 per-backend + three-way
+    "백엔드별로 보면 합성 이종(F)에서 봤던 패턴이 실제 데이터에서도 그대로입니다—default는 작은 4090을 가장 "
+    "심하게 태우고(c48에서 4090 히트 0.03 대 5090 0.06), tr은 두 GPU를 0.67에서 0.87로 균형 있게 유지합니다. "
+    "한 가지 차이는, F에선 tr이 큰 5090에 일을 1.6배 더 보냈는데 실제 데이터에선 거의 1대 1로 5090을 덜 "
+    "활용한다는 점입니다. 그런데도 처리량이 용량 증가분보다 더 많이 올랐다는 건 5090에 아직 여유가 있다는 "
+    "뜻이라, 용량 비례로 5090에 더 밀면 default를 넘어설 여지가 있습니다—다음 과제로 이어집니다.",
+    # 14 comparison (2x2)
+    "이제 2×2 네 칸을 다 채웠습니다. 표로 정리하면, 합성에 동일 GPU는 tr 처리량 +57%, 합성에 이종은 +100%, "
+    "실데이터에 동일 GPU는 -34%, 실데이터에 이종은 -8%로 회복입니다. KV 히트율은 네 칸 모두 tr 압승이고요. "
+    "그러니까 tr의 스래싱 억제 능력 자체는 항상 견고한데, 처리량 이득은 프로그램이 GPU KV에 얼마나 육박하는지와 "
+    "GPU 용량 구성에 달려 있다—이게 최종 결론입니다. 특히 실데이터에서 큰 5090이 tr의 적자를 34%에서 8%로 "
+    "줄였다는 게 이종의 의미입니다.",
     # 13 implication/next
     "그럼 다음에 뭘 할 거냐. tr이 5090에 일을 더 보내긴 하는데 그 비율이 1대 1.6이었습니다. 실제 용량비는 1대 "
     "2.03인데 말이죠. 즉 tr이 큰 5090의 여유를 다 못 씁니다—처리량이 용량을 51% 늘렸는데 31%밖에 안 올랐어요. "
