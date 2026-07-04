@@ -62,6 +62,15 @@ def main():
     ax.set_title("p95 latency vs concurrency  —  4090+5090 hetero\n(lower = better)", fontsize=10)
     ax.grid(alpha=0.3); ax.legend(); save(fig, "p95")
 
+    # 1c) global KV hit rate tr vs default
+    fig, ax = plt.subplots(figsize=(6.2, 4.2))
+    ax.plot(cs, trs(lambda x: x["prefix_cache_hit_rate_global"] or 0), "o-", label="tr (ThunderAgent)", lw=2)
+    ax.plot(cs, dfs(lambda x: x["prefix_cache_hit_rate_global"] or 0), "s--", label="default", lw=2)
+    ax.set_xlabel("concurrency"); ax.set_ylabel("KV prefix-cache hit rate"); ax.set_ylim(0, 1)
+    ax.set_title("Global KV hit rate vs concurrency  —  4090+5090 hetero\n"
+                 "(tr holds ~0.67; default collapses to ~0.02)", fontsize=10)
+    ax.grid(alpha=0.3); ax.legend(); save(fig, "hitrate")
+
     # 2) per-backend hit rate (key panel): 4 lines
     fig, ax = plt.subplots(figsize=(6.6, 4.4))
     ax.plot(cs, trs(lambda x: x["per_backend"]["4090"]["hit_rate"] or 0), "o-", color="tab:blue", label="tr · 4090", lw=2)
