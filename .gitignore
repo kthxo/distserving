@@ -7,3 +7,4 @@ openhands_swebench/system_monitor.csv
 # local reproduction env (yunuikang)
 .venv/
 *.egg-info/
+.claude/settings.local.json
