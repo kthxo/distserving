@@ -9,3 +9,4 @@ openhands_swebench/system_monitor.csv
 *.egg-info/
 .claude/settings.local.json
 examples/inference/ToolOrchestra/evaluation/cache/
+slides/
