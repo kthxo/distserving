@@ -80,10 +80,74 @@
   | 16 (fit~25 미만) | 0.133 | **0.81** | 240 | 스래싱 전(정상) |
   | **32 (fit 초과)** | **0.039** | **0.29** | **1490** | **default 붕괴**(hit 0.81→0.29, thru 3.4×↓, p95 6×↑) |
   → default가 KV fit 초과 시 스래싱 붕괴 확인. **tr 절반에서 tr이 C=32·64에서 유지하면 flip 입증**(가설 지지).
-- 예상 ~7h. [tr 절반 + 최종 정합 대기]
+- ✅ **완료 (2026-07-17 08:15)**. 3회 평균:
+
+| C | def thru | tr thru | def hit | tr hit | def p95 | tr p95 | tr 이득 |
+|---|----------|---------|---------|--------|---------|--------|---------|
+| 16 (fit 미만) | 0.133 | 0.133 | 0.809 | 0.810 | 254 | 254 | 동률(음성대조 ✅) |
+| **32** (fit 초과) | 0.039 | **0.073** | 0.269 | **0.613** | 1402 | **761** | **thru +87%, hit 2.3×, p95 −46%** |
+| **64** (fit 초과) | 0.040 | **0.073** | 0.182 | **0.569** | 2382 | **1254** | **thru +80%, hit 3.1×, p95 −47%** |
+
+**★ k_fit-flip 입증 (P1 핵심 결과)**:
+- 4090에서 TraceLab는 tr이 default 대비 **−34%로 패**(R≈0.31<1, KV 43,888에 fit~2). Pro6000에서 KV를 **×10.4(456,944 tok, fit~25)** 확대하니 **C≥32에서 tr이 default를 명확히 역전**(throughput +80~87%, hit 2~3배, p95 절반). → 계획서 중심 가설 **"4090 R<1 패 → Pro6000 R≥1 승"** 정량 입증.
+- **메커니즘**: C≥32(>fit~25)에서 default는 KV 과구독 → 스래싱(hit 0.81→0.18 붕괴, 재프리필 낭비로 throughput·latency 붕괴). tr은 pause로 resident를 fit 내로 유지 → 스래싱 억제(hit 0.57~0.61), GPU 유효 활용 → throughput·hit·latency 3축 우위. C=16(<fit)은 양쪽 여유라 동률(음성대조 성립).
+- 저편차(3회): tr/default 각 셀 반복 편차 작음. 산출물: `tracelab_{default,tr}.jsonl`, `sample_*_c*.csv`, `prof_*/`.
+
+### P1-2. SWE 재녹화 (stratified-64, Qwen3-32B) — 실행 중 (파이프라인 자동 착수 08:15)
+- `run_swe_record_32b_yunuikang.sh`(신규): 프록시(:9000 default --profile → `rec_swe/`) + `mini-extra swebench --subset lite --split test --filter stratified-64 --workers 12 --config swebench_qwen32b_config --environment-class docker --cleanup-images`.
+- ✅ **완료 (2026-07-17 09:50, 총 ~95분, 64/64 인스턴스)**. 정규화 → `swebench_trace_32b.jsonl`(58세션/1088turns).
+- **게이트2 정보(속도)**: 60분에 40/64 완료 = **0.67 inst/min(40/h)**, ETA ~1.6h. **이전 8B(~3h6m)보다 ~2배 빠름**(TP2 2×Pro6000 decode 1038tok/s + swebench 이미지 캐시 + workers12). → **stratified-64 유지, 상향 fallback 불필요**(자율 결정).
+- **특성화(정규화 trace)**: sessions=58, turns=1088, turns/session median=16(max 40), **input median 7,897, output median 854, tool median 0.15s → decode-heavy 재확인**(이전 8B 성격 일치). **clip rate 8/58=13.8%(<30% ✅)**.
+- **★ SWE R 모델 예측**: input 7,897 → fit≈58(456,944/7,897). C=16·32·64는 fit 근처/이하 → default 스래싱이 TraceLab만큼 심하지 않을 것(프로그램이 작아 더 많이 적재). decode-heavy(d≈0.99)라 tr 우세 예상하되 격차는 TraceLab보다 작을 수 있음.
+
+### P1-3. SWE 스윕 + 풀 불변성 — 실행 중 (tmux `tp2stage2`, stage2)
+- `run_p1_stage2.sh`: 풀 불변성(default, C=16, pool 32 vs 58) → SWE 스윕(default→tr, **C=16·32·64**, per-C NPROG=max(96,2C)). 출력 `swe_{default,tr}.jsonl`, 샘플러 `swe/sample_*`(TraceLab와 분리).
+- **✅ 풀 불변성 통과**: pool32 thru mean 0.124/hit 0.91 vs pool58 thru mean 0.119/hit 0.91 → **~4% 이내 동일 → stratified-64 대표성 확인**(300 불필요, 자율 확정).
+- ✅ **SWE 스윕 완료 (2026-07-17 19:57)**. 3회 평균:
+
+| C | def thru | tr thru | def hit | tr hit | def p95 | tr p95 | tr 이득 |
+|---|----------|---------|---------|--------|---------|--------|---------|
+| 16 (fit~58 미만) | 0.125 | 0.124 | 0.911 | 0.911 | 264 | 268 | 동률 |
+| 32 (fit~58 미만) | 0.135 | 0.133 | 0.911 | 0.911 | 403 | 467 | 동률(둘 다 스래싱 전) |
+| **64** (fit~58 초과) | 0.024 | **0.051** | 0.241 | **0.686** | 4118 | **2016** | **thru +113%, hit 2.8×, p95 −51%** |
+
+**★ SWE flip + R모델 교차입증**: SWE는 decode-heavy(d=0.996, step_profiles 실측)·input median 7,897 → **fit≈58**. C=16·32(fit 이하)는 default·tr 모두 정상(hit 0.91), **C=64(fit 초과)에서 default 붕괴**(hit 0.91→0.24)하고 **tr이 역전**(+113% thru, 2.8× hit). → **TraceLab(fit~25→C=32 붕괴)와 SWE(fit~58→C=64 붕괴)**가 **같은 하드웨어에서 워크로드별 fit이 붕괴 임계를 결정**함을 입증 (fit = KV_pool / program_input; TraceLab 18.7k→25, SWE 7.9k→58).
+
+### P1-4. R 모델 분석 (예측 U vs 실측 U) — `plot_tp2_yunuikang.py`
+- 샘플러에서 k_fit(=mean resident)·U(=GPU busy 시간비율) 산출, d(TraceLab 0.289, SWE 0.996), R=k_fit·d, 예측 U=min(R,1).
+- **★ k_fit-flip 정량**: TraceLab tr의 **k_fit이 4090 1.6 → Pro6000 21.6(C=32)**로 상승 → **R 0.31 → 6.2** → **실측 U 0.35 → 0.97**. 즉 4090에서 tr이 pause로 GPU를 굶겨(R<1) 지던 것이, KV ×10.4로 fit이 커져 tr이 충분히 적재(R≫1) → GPU 미굶김 → 승. **4090 앵커 포함 Pearson r(예측U, 실측U)=0.982.**
+- **★ 정직한 caveat(중요 통찰)**: Pro6000에선 **모든 셀 R>1 → 실측 U~0.97–1.0 포화**(스래싱 default도 GPU는 재프리필로 busy). 즉 Pro6000에서 tr의 우위는 **occupancy(U)가 아니라 KV hit/goodput**(default는 busy하나 낭비, tr는 hit 유지로 productive). → **k_fit-flip의 메커니즘이 4090(R<1 starvation 해소)과 Pro6000(thrashing 회피)에서 층위가 다름**을 명확히 함.
+
+### P1-5. 산출물 (그래프) — `figures/tp2_*.png` (9종)
+`tp2_{tracelab,swe}_{throughput,hitrate,p95}.png`(6), `tp2_kfit_flip_4090_vs_pro6000.png`, `tp2_pred_vs_meas_U.png`(R모델+flip, 4090 vs Pro6000), `tp2_sys_microbench.png`.
+
+---
+
+## ★ 게이트 3 — P1 완료 (P2 진입 전 정지)
+
+### 핵심 결과
+1. **k_fit-flip 입증(중심 가설)**: 4090에서 tr이 default 대비 **−34%로 지던 TraceLab**이, Pro6000 KV **×10.4(456,944 tok)** 확대로 **C≥32에서 tr이 역전**(C=32 +87% thru·2.3× hit; C=64 +80%·3.1×). R모델: tr U 0.35(4090)→0.97(Pro6000), Pearson r=0.982.
+2. **R모델 교차입증(2 워크로드)**: 붕괴 임계 = fit = KV_pool/program_input. **TraceLab(fit~25)→C=32 붕괴, SWE(fit~58)→C=64 붕괴**. 같은 HW, 프로그램 크기만 다름.
+3. **SWE flip**: decode-heavy(d=0.996), C=64(fit 초과)에서 tr +113% thru·2.8× hit·p95 −51%.
+4. **음성대조 성립**: fit 미만 C(TraceLab C=16, SWE C=16·32)는 tr≈default.
+5. **부수 검증**: SYS 페널티 TP2/TP1=1.73×(효율 86.5%), 풀 불변성(32≈58), Python.h 무이슈, GPU 매핑 대칭 확인.
+
+### P0/P1 전 항목 완료
+- P0: KV 456,944 tok(×10.41), Python.h 클린, SYS 1.73×, TraceLab d=0.289, GPU매핑 검증.
+- P1: TraceLab flip ✅, SWE 재녹화(64/64, decode-heavy, clip 13.8%) ✅, 풀 불변성 ✅, SWE flip ✅, R모델(r=0.982) ✅, 그래프 9종 ✅.
+
+### 한계
+- 모델 스케일 32B(논문 235B/355B 미달) → 절대비교 안 함, 상대·R정합·정성. C=128·256 제외(스래싱 slow, flip은 C≤64로 충분 입증). U 포화로 Pro6000 R모델은 4090 앵커로 flip 해석(정직 기록). SWE C=16·32는 fit 이하라 tr≈default(붕괴는 C=64만).
+
+### 정지
+**P1 완료. P2(ScienceAgent)·P3(HLE) 미착수(계획·지시대로 정지).** 백엔드 tp2serve(GPU1+2 점유)는 현재 가동 중 — P2 승인 시 재사용 가능, 불필요하면 정지해 GPU 반환 가능(사용자 결정).
 
 ---
 
 ## 게이트 1 — [P0 완료 후 작성]
 
 ## P1 — [게이트 1 승인 후]
+
+---
+
+**→ P2(ScienceAgentBench)는 별도 로그로 진행: `logs/2026-07-17_P2_SCIENCE_RESULTS_yunuikang.md`**

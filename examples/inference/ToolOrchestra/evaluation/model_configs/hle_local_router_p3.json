@@ -1,0 +1,15 @@
+{
+  "retrieval": [
+    {
+      "ip_addr": "127.0.0.1",
+      "port": "1401"
+    }
+  ],
+  "orchestrator": [
+    {
+      "ip_addr": "127.0.0.1",
+      "port": "9000"
+    }
+  ],
+  "vllm_model_config_path": "/home/yunuikang/yunuikang_work/distserving/examples/inference/ToolOrchestra/evaluation/model_configs/hle_local_router_p3.json"
+}
