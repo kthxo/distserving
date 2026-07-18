@@ -1,7 +1,26 @@
 # 논문 ↔ 우리 실험 정밀 대조 (ThunderAgent)
 
+> ## 🚨 2026-07-17 정정 공지 — **§0-1 "출처 정정"은 무효다. 읽기 전에 반드시 확인할 것.**
+>
+> 이 문서는 **28쪽 구본**을 기준으로 작성됐다. **34쪽 갱신본**(`/home/yunuikang/yunuikang_work/ThunderAgent.pdf`,
+> 2026-07-17 수령)을 실측 대조한 결과, **§0-1이 "이 PDF에 없다"며 정정했던 5개 항목이 34p본에는 전부 존재한다.**
+> 즉 **지시서(교수님)의 원래 참조가 옳았고, 우리가 구본을 근거로 잘못 정정한 것이다.**
+>
+> | §0-1이 "없다"고 한 것 | 34p 실제 |
+> |---|---|
+> | §A.5 | ✅ **§A.5 "Portability of ThunderAgent across Hardware Generations" (p.24)** — 본문에 *"the working set fits comfortably in HBM and thrashing is rare"* |
+> | Table 3 = H100 vs A100 | ✅ **Table 3 "Compute-to-bandwidth ratio across hardware tiers" (p.24)** — H100 **295.2** / A100 **153.0** GFLOPS/GB |
+> | Figure 10 = compute-to-bandwidth | ✅ **Figure 10 "ThunderAgent on A100 GPUs" (p.25)** |
+> | "A100"·"compute-to-bandwidth" 문구 없음 | ✅ 둘 다 존재 |
+> | 느린 GPU 스래싱 비교 실험 없음 | ✅ **8×A100 실험 존재** — 저부하(24) tr≈vLLM, 고부하(48·72)에서 **1.71–2.08×**(mini-SWEAgent) |
+>
+> → **§0-1은 폐기.** 그 밖의 항목(1·2·3·4·5)도 34p 기준 인용 번호가 바뀌었다(**Appendix E↔F 교환**, Table +1,
+> Figure 9→12·10→13, 참고문헌 +1 시프트). **정정표·영향 분석은 `logs/2026-07-17_VLLM_PROFILING_yunuikang.md` §5-00·§5-0b 참조.**
+> **hetero gap 영향**: "논문은 GPU 세대를 안 바꿔봤다"는 **더 이상 못 씀**. 살아남는 것은 **"한 클러스터 안의 이종 혼합"**뿐
+> (§A.5도 8×A100 단독 / 8×H100 단독이라 혼합 실험은 여전히 없음).
+
 > 작성: 강윤의 · 브랜치 `yunuikang/thunderagent` · 2026-07-02
-> 대상 논문 PDF: `assets/paper/_Arxiv__ThunderAgent.pdf` (28쪽 버전, 본 문서의 모든 인용은 이 파일 기준)
+> 대상 논문 PDF: `assets/paper/_Arxiv__ThunderAgent.pdf` (28쪽 **구본** — ⚠️ 위 정정 공지 참조, 본 문서의 모든 인용은 이 파일 기준)
 > 대상 실험: `2026-07-02_EXPERIMENT_LOG_yunuikang.md` (§7 일반 워크로드, §9 스래싱 심화, §10 characterization)
 
 ---

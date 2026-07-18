@@ -1,5 +1,15 @@
 # ThunderAgent 메커니즘 레퍼런스 — cost model·policy ↔ 코드 (Phase 0)
 
+> ## 🚨 2026-07-17 정정 — **§1-1 표의 `Cost_unused` 설명이 논문과 다르다.**
+> 아래 §1-1은 `Cost_unused`를 *"GPU에 올려뒀지만 tool 실행 중이라 놀고 있는 KV 점유"* 로 적었으나, **논문 p.6 §4.2 원문은**
+> (28p·34p **양쪽 동일**, 실측 확인):
+> > *"**Cost_unused** reflects **memory imbalance across data parallel (DP) inference backend replicas** (Section 3.2);
+> > and **Cost_caching** accumulates while **holding memory during external tool execution** (Section 3.3)."*
+>
+> → **tool 시간에 과금하는 항은 `Cost_unused`가 아니라 `Cost_caching`이다.** §1-1·§1-3 표의 "unused" 행을 **`Cost_caching`으로 교체**할 것.
+> (코드의 `tool_coefficient`·`2^(-t)` 감쇠가 대응하는 논문 항도 `Cost_caching`이다.) 리뷰어가 즉시 잡을 종류의 오류.
+> 근거·전체 정정표: `logs/2026-07-17_VLLM_PROFILING_yunuikang.md` §5-0·§5-0b. 또한 **"Appendix E.2" 인용은 34p본에서 `Appendix F.2`로 바뀌었다**(E↔F 교환).
+
 > 작성: 강윤의 · 브랜치 `yunuikang/thunderagent` · 2026-07-06
 > 목적: 지도교수 피드백 (a) "알고리즘(cost model·policy)을 먼저 정확히 이해→그 로직으로 결과 설명".
 > 이 문서는 **논문 §4 ↔ 실제 코드(파일:라인) 1:1 매핑**이며, 이후 D/F/G 및 실험 C·D의 모든 해석은

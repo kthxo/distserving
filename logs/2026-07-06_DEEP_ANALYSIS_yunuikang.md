@@ -1,5 +1,16 @@
 # 심화 분석 — 조사 A(eviction 경로) + 조사 B(재프리필 재정의·메모리 지표) (2026-07-06)
 
+> ## 🚨 2026-07-17 정정 — **§B-1의 "granularity가 다르다" 추정은 틀렸다. 그리고 대안 지표가 존재한다.**
+> 1. **원인 규명**: `queries`(~200M)가 `prompt_tokens_total`(~7M)과 안 맞는 이유는 granularity가 아니라
+>    **vLLM V1이 waiting 큐에서 승인 실패한 요청을 매 step 재계수**하기 때문이다
+>    (`v1/core/sched/scheduler.py:636` peek → `:710` record() → `:888-895` break, `pop_request`는 `:917`).
+>    팽창 배수 = 큐 head 재검사 횟수. 실측: tr ~2배 평탄 / **default C=32에서 30배**.
+> 2. **⚠️ "미스율(1−hit)만 쓰면 robust하다"도 부분적으로 틀렸다.** 미스율도 **같은 오염을 공유**한다(재검사 많은 요청이 가중치 N배).
+> 3. **✅ 대안이 있었다**: `vllm:prompt_tokens_by_source{source="local_compute"}` = **실제 계산된 프리필 토큰**(재검사 오염 없음).
+>    불변식 `local_compute + cached = total`(`v1/metrics/stats.py:287-289`) — **2026-07-17 실서버에서 존재·성립 확인**.
+>    실측: default C=16에서 **참 hit 0.2065 vs 보고 hit 0.0805 → 보고 지표가 참값을 2.6배 과소평가**.
+> → `prompt_tokens_total` 폐기(§B-1)는 **옳았다**(코드로 확증: 논리적 총량, 캐시 무관). 근거: `logs/2026-07-17_VLLM_PROFILING_yunuikang.md` §1-2.
+
 > 작성: 강윤의 · 브랜치 `yunuikang/thunderagent` · 2026-07-06
 > 전제 문서: `2026-07-06_MECHANISM_REFERENCE_yunuikang.md`(Phase 0). 이 문서는 그 로직으로 결과를 재서술.
 > 근거: 코드 + 기존 결과 JSONL(재분석, **새 GPU 실행 없음**) + vLLM 시작 로그.
