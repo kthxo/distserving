@@ -31,6 +31,8 @@ def main() -> int:
                         help="Weight for acting tokens in capacity calculation (default: 1.0)")
     parser.add_argument("--use-acting-token-decay", action="store_true",
                         help="Use 2^(-t) decay for acting tokens in resume capacity calculation")
+    parser.add_argument("--capacity-overcommit-factor", type=float, default=1.0,
+                        help="Overcommit factor f for capacity threshold (1.0=tr default, >1 allows overcommit, very large≈default)")
     args = parser.parse_args()
 
     # Set config BEFORE importing app
@@ -48,6 +50,7 @@ def main() -> int:
         scheduler_interval=args.scheduler_interval,
         acting_token_weight=args.acting_token_weight,
         use_acting_token_decay=args.use_acting_token_decay,
+        capacity_overcommit_factor=args.capacity_overcommit_factor,
     )
     set_config(config)
     
@@ -63,6 +66,8 @@ def main() -> int:
         print(f"⚖️  Acting token weight: {args.acting_token_weight}")
         if args.use_acting_token_decay:
             print(f"📉 Acting token decay: enabled (2^-t)")
+        if args.capacity_overcommit_factor != 1.0:
+            print(f"📐 Capacity overcommit factor: {args.capacity_overcommit_factor}")
 
     # Import uvicorn here to avoid import errors if not installed
     try:

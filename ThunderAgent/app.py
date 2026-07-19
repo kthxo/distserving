@@ -244,6 +244,7 @@ def _create_router() -> MultiBackendRouter:
         backend_type=config.backend_type,
         acting_token_weight=config.acting_token_weight,
         use_acting_token_decay=config.use_acting_token_decay,
+        capacity_overcommit_factor=config.capacity_overcommit_factor,
     )
 
 

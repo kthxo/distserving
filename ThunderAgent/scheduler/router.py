@@ -57,15 +57,16 @@ class MultiBackendRouter:
         raise ValueError(f"Unsupported backend_type: {backend_type}")
 
     def __init__(
-        self, 
-        backend_urls: str | List[str], 
-        *, 
+        self,
+        backend_urls: str | List[str],
+        *,
         profile_enabled: bool = False,
         scheduling_enabled: bool = True,
         scheduler_interval: float = 5.0,
         backend_type: str = "vllm",
         acting_token_weight: float = 1.0,
         use_acting_token_decay: bool = False,
+        capacity_overcommit_factor: float = 1.0,
     ) -> None:
         # Support single URL string or list of URLs
         if isinstance(backend_urls, str):
@@ -73,6 +74,9 @@ class MultiBackendRouter:
         
         # Weight for acting tokens in capacity calculation
         self.acting_token_weight = acting_token_weight
+
+        # Overcommit factor: margin = (f - 1) * C_total per backend
+        self.capacity_overcommit_factor = capacity_overcommit_factor
         
         # All backends (pass acting_token_weight as tool_coefficient)
         self.backends: Dict[str, BackendState] = {}
@@ -353,7 +357,9 @@ class MultiBackendRouter:
         for backend in self.backends.values():
             if not backend.healthy:
                 continue
-            if backend.remaining_capacity() < required_capacity:
+            margin = (self.capacity_overcommit_factor - 1.0) * (
+                backend.cache_config.total_tokens_capacity if backend.cache_config else 0)
+            if backend.remaining_capacity() + margin < required_capacity:
                 continue  # Not enough capacity for this program
             if backend.active_program_tokens < min_tokens:
                 min_tokens = backend.active_program_tokens
@@ -767,17 +773,20 @@ class MultiBackendRouter:
         
         # Step 3: Check thrashing and pause if needed (uses original capacity, no decay)
         for url, backend in self.backends.items():
-            if backend.cache_config and backend.remaining_capacity() < 0:
-                await self._pause_until_safe(backend)
+            if not backend.cache_config:
+                continue
+            margin = (self.capacity_overcommit_factor - 1.0) * backend.cache_config.total_tokens_capacity
+            if backend.remaining_capacity() + margin < 0:
+                await self._pause_until_safe(backend, margin)
 
-    async def _pause_until_safe(self, backend: BackendState):
+    async def _pause_until_safe(self, backend: BackendState, margin: float = 0.0):
         """Pause programs until backend is within capacity.
-        
+
         Priority: ACTING first (smallest tokens), then REASONING (smallest tokens).
         """
         paused_count = 0
-        
-        while backend.remaining_capacity() < 0:
+
+        while backend.remaining_capacity() + margin < 0:
             # Priority 1: Pause ACTING programs (smallest first)
             acting_programs = self._get_acting_programs_sorted(backend.url, ascending=True)
             if acting_programs:
@@ -832,9 +841,11 @@ class MultiBackendRouter:
         for url, backend in self.backends.items():
             if not backend.cache_config or not backend.healthy:
                 continue
+            margin = (self.capacity_overcommit_factor - 1.0) * backend.cache_config.total_tokens_capacity
             remaining = (backend.remaining_capacity_with_decay()
                          if backend.use_acting_token_decay
                          else backend.remaining_capacity())
+            remaining += margin
             if remaining > BUFFER_PER_PROGRAM:
                 backend_caps.append((backend, remaining))
                 total_capacity += remaining

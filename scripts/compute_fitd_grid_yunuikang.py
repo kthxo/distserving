@@ -45,7 +45,7 @@ MODELS = {
 # (label, model, mem_total_GB, C_total_measured or None)
 HW = [
     ("RTX 4090",         "Qwen3-8B",             24.0,  43888),    # 측정 (expC/D)
-    ("RTX 5090",         "Qwen3-8B",             32.0,  None),     # goguma 목표
+    ("RTX 5090",         "Qwen3-8B",             32.0,  89040),    # 측정 (goguma STEP1, gpu_util=0.92)
     ("Pro6000 x1",       "Qwen3-32B",            96.0,  None),
     ("Pro6000 x2 (TP2)", "Qwen3-32B",           192.0,  456944),   # 측정 (P1)
     ("A100-80G",         "Qwen3-32B",            80.0,  None),
