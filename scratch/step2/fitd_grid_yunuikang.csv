@@ -1,0 +1,43 @@
+gpu,model,mem_GB,C_total_tok,C_total_src,rough,workload,wl_status,d,ctx_tok,fit,R_cap_fitxd,NEED_inv_d,f_needed_sat,zone
+RTX 4090,Qwen3-8B,24.0,43888,measured,False,SWE,measured,0.996,7897.0,5.558,5.535,1.0,0.18,tr-dominant(>=1)
+RTX 4090,Qwen3-8B,24.0,43888,measured,False,TraceLab,measured,0.196,18684.0,2.349,0.46,5.1,2.17,tradeoff(<1)
+RTX 4090,Qwen3-8B,24.0,43888,measured,False,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+RTX 4090,Qwen3-8B,24.0,43888,measured,False,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+RTX 4090,Qwen3-8B,24.0,43888,measured,False,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,0.686,0.069,10.0,14.58,tradeoff(<1)
+RTX 4090,Qwen3-8B,24.0,43888,measured,False,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,1.371,0.206,6.67,4.86,tradeoff(<1)
+RTX 5090,Qwen3-8B,32.0,89040,measured,False,SWE,measured,0.996,7897.0,11.275,11.23,1.0,0.09,tr-dominant(>=1)
+RTX 5090,Qwen3-8B,32.0,89040,measured,False,TraceLab,measured,0.196,18684.0,4.766,0.934,5.1,1.07,tradeoff(<1)
+RTX 5090,Qwen3-8B,32.0,89040,measured,False,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+RTX 5090,Qwen3-8B,32.0,89040,measured,False,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+RTX 5090,Qwen3-8B,32.0,89040,measured,False,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,1.391,0.139,10.0,7.19,tradeoff(<1)
+RTX 5090,Qwen3-8B,32.0,89040,measured,False,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,2.783,0.417,6.67,2.4,tradeoff(<1)
+Pro6000 x1,Qwen3-32B,96.0,96597,estimated,False,SWE,measured,0.996,7897.0,12.232,12.183,1.0,0.08,tr-dominant(>=1)
+Pro6000 x1,Qwen3-32B,96.0,96597,estimated,False,TraceLab,measured,0.289,18684.0,5.17,1.494,3.46,0.67,tr-dominant(>=1)
+Pro6000 x1,Qwen3-32B,96.0,96597,estimated,False,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+Pro6000 x1,Qwen3-32B,96.0,96597,estimated,False,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+Pro6000 x1,Qwen3-32B,96.0,96597,estimated,False,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,1.509,0.151,10.0,6.63,tradeoff(<1)
+Pro6000 x1,Qwen3-32B,96.0,96597,estimated,False,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,3.019,0.453,6.67,2.21,tradeoff(<1)
+Pro6000 x2 (TP2),Qwen3-32B,192.0,456944,measured,False,SWE,measured,0.996,7897.0,57.863,57.632,1.0,0.02,tr-dominant(>=1)
+Pro6000 x2 (TP2),Qwen3-32B,192.0,456944,measured,False,TraceLab,measured,0.289,18684.0,24.456,7.068,3.46,0.14,tr-dominant(>=1)
+Pro6000 x2 (TP2),Qwen3-32B,192.0,456944,measured,False,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+Pro6000 x2 (TP2),Qwen3-32B,192.0,456944,measured,False,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+Pro6000 x2 (TP2),Qwen3-32B,192.0,456944,measured,False,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,7.14,0.714,10.0,1.4,tradeoff(<1)
+Pro6000 x2 (TP2),Qwen3-32B,192.0,456944,measured,False,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,14.28,2.142,6.67,0.47,tr-dominant(>=1)
+A100-80G,Qwen3-32B,80.0,38790,estimated,False,SWE,measured,0.996,7897.0,4.912,4.892,1.0,0.2,tr-dominant(>=1)
+A100-80G,Qwen3-32B,80.0,38790,estimated,False,TraceLab,measured,0.289,18684.0,2.076,0.6,3.46,1.67,tradeoff(<1)
+A100-80G,Qwen3-32B,80.0,38790,estimated,False,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+A100-80G,Qwen3-32B,80.0,38790,estimated,False,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+A100-80G,Qwen3-32B,80.0,38790,estimated,False,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,0.606,0.061,10.0,16.5,tradeoff(<1)
+A100-80G,Qwen3-32B,80.0,38790,estimated,False,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,1.212,0.182,6.67,5.5,tradeoff(<1)
+H100-80G,Qwen3-32B,80.0,38790,estimated,False,SWE,measured,0.996,7897.0,4.912,4.892,1.0,0.2,tr-dominant(>=1)
+H100-80G,Qwen3-32B,80.0,38790,estimated,False,TraceLab,measured,0.289,18684.0,2.076,0.6,3.46,1.67,tradeoff(<1)
+H100-80G,Qwen3-32B,80.0,38790,estimated,False,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+H100-80G,Qwen3-32B,80.0,38790,estimated,False,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+H100-80G,Qwen3-32B,80.0,38790,estimated,False,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,0.606,0.061,10.0,16.5,tradeoff(<1)
+H100-80G,Qwen3-32B,80.0,38790,estimated,False,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,1.212,0.182,6.67,5.5,tradeoff(<1)
+8xH100-640G,"Qwen3-235B(MoE,FP8)",640.0,1927928,estimated,True,SWE,measured,0.996,7897.0,244.134,243.158,1.0,0.0,tr-dominant(>=1)
+8xH100-640G,"Qwen3-235B(MoE,FP8)",640.0,1927928,estimated,True,TraceLab,measured,0.289,18684.0,103.186,29.821,3.46,0.03,tr-dominant(>=1)
+8xH100-640G,"Qwen3-235B(MoE,FP8)",640.0,1927928,estimated,True,HLE,placeholder: P3 24h 녹화 tool지연에서 산출 예정(수집중),,,,,,,TBD
+8xH100-640G,"Qwen3-235B(MoE,FP8)",640.0,1927928,estimated,True,Science,placeholder: 데이터 blocker 미수집(보류),,,,,,,TBD
+8xH100-640G,"Qwen3-235B(MoE,FP8)",640.0,1927928,estimated,True,deep-research류,assumed-class: 저듀티·롱컨텍스트,0.1,64000.0,30.124,3.012,10.0,0.33,tr-dominant(>=1)
+8xH100-640G,"Qwen3-235B(MoE,FP8)",640.0,1927928,estimated,True,longctx-generic,assumed-class: 롱컨텍스트,0.15,32000.0,60.248,9.037,6.67,0.11,tr-dominant(>=1)
