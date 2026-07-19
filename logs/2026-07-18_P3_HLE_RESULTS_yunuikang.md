@@ -77,3 +77,27 @@
 - **✅ GLM 유닛 테스트**: `get_llm_response(model="glm-4.5-flash")` → 정상 생성 + `\boxed{}` 포맷 포함(thinking disabled 효과).
 - **남은 것**: 임베더 다운로드 완료 → model_config(오케스트레이터를 프록시로) + HLE example_path 배선 → launch 스크립트 venv 개작(retriever GPU2 + orchestrator GPU1 + proxy) → **스모크 1회 → tool 실패율·포맷 준수율 보고(정지)**.
 - 가드레일 유지: router.py 무수정, 키 로그 미기재, GPU0 미접촉.
+
+### B-3. ★ 스모크 → tool 100% 실패 진단·수정 (하네스 debugging)
+- **1차 스모크**: orchestrator tool call 전부 "342 invalid"(len 0) → GLM·검색 미발동. 프록시·orchestrator·GLM은 직접 테스트 정상(무죄) → eval 하네스 문제로 격리.
+- **원인(파일:라인)**: `LLM_CALL_p3_yunuikang.py:919` `send_tools_to_vllm = bool(tools) and os.path.exists(str(model))` — tools를 **model이 파일 경로일 때만** 전달. 우리는 `--served-model-name orchestrator`(경로 아님) → `os.path.exists("orchestrator")=False` → **tools 미전달** → orchestrator가 tool 못 부름.
+- **수정(격리본)**: `os.path.exists(model) or str(model) in {"orchestrator"}` 로 orchestrator 이름도 허용.
+- **검증(1문항 재스모크)**: **tool call 0→2 유효**(search+answer), retriever 쿼리 수신(13줄), 2-round 완료(무효 30-round 루프 해소). GLM·FAISS 실제 발동 확인.
+
+### B-4. ★ 스모크 게이트 통과 (수정 후 5문항, 2026-07-18)
+- **tool 실패율: 100% → 0%** (16 tool call 전부 유효, responses 16/16, 에러 0).
+- **tool 분포**: search 12 + answer 4 → 원격-tool 축 발동. tool 응답에 `"model":"glm-4.5-flash"` = **GLM 실사용 확인**.
+- **FAISS 검색 실작동**: search 응답 `context_str="Documents: Doc 1..."` (문서 반환).
+- **포맷 준수**: GLM 출력에 `\boxed` 9회·`<answer>` 1회 → 기대 포맷. 최종 pred 정상 추출('D','18','yeyo','Z+Z+Z+Z+Z').
+- 속도: round당 ~4–31s(Nemotron decode). 문항당 ~40s–3min. (5문항 중 4 완료; 1개 slow/미완 — 경미.)
+- **판정: 스모크 PASS** — 워크로드가 HLE 원격-tool 축(GLM tools + FAISS retrieval)을 정상 자극. **스윕 진행 가능(사용자 승인 대기).**
+
+### B-5. ★ 다중-window 녹화 — 1·2단계 (패턴 확보 + 샘플러 기동) (2026-07-18)
+계획서 §4-4-4(개정) A/B/C 실행. 게이트 준수: 샘플러만 띄우고 정지.
+- **1. 패턴 확보(GPU 잠깐)**: 스모크 파이프라인 재사용, `LLM_CALL_p3`에 env-gated 캡처 로깅(`P3_GLM_CAPTURE`) 추가 → HLE 5문항 실행으로 **GLM 호출 프롬프트 26개 캡처**(`glm_prompts_captured.jsonl`). 대표 subset **4개**(search sm/lg + answer md/lg, 실제 max_tokens 유지) → `glm_prompts_sampler.jsonl`.
+- **FAISS 검색 지연(결정적 상수)**: `/retrieve` 8콜 측정 → **median 319ms, 312–331ms(매우 타이트)** → 상수로 둠(t_tool = GLM지연 + FAISS 0.32s).
+- **2. 24h 샘플러 기동(unattended, GPU 해제)**: `glm_latency_sampler_p3_yunuikang.py`(신규) — 고정 4프롬프트를 GLM API에 **15분 간격 24h** 발사, 지연+timestamp 로깅(호출별 latency·kind·성공/재시도·ts·out_tokens). **GPU 미사용**, daily-cap 800(<1000/day), 429 백오프. tmux `p3sampler`, 출력 `glm_latency_24h.jsonl`.
+  - **orchestrator(GPU1)·retriever(GPU2) 정지 → GPU1·2 해제**(각 2MiB). GPU0 타 사용자(506352) 미접촉.
+  - **★ 시간변동 조기 확인**: 1-tick 검증(search 1.6–3.6s) → 기동 첫 tick(search 7.6–11.3s) — 같은 프롬프트인데 지연 상승(=측정 대상 현상).
+- **판정: 1·2단계 완료, 정지.** 24h 후 사용자 재호출 시 3단계(window별 분포·d·성공률 표 + 게이트).
+- 가드레일: router.py 무수정, 격리 복사본(*_p3), 키 미기재(env·헤더만), GPU0 미접촉.

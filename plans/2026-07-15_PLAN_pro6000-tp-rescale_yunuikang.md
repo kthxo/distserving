@@ -182,7 +182,7 @@ export CUDA_VISIBLE_DEVICES=1,2                 # Deployment A(TP2). B는 오케
 - **왜 GLM 무료 Flash 채택**: **완전 무료(1000 req/day 무료티어)** + **OpenAI-호환**(`https://api.z.ai/api/openai/v1`) + 대용량 context + **원격이라 stochastic 성격 보존**.
 - **왜 나머지 탈락**: **DeepSeek** = 원격·초저가지만 **유료**(완전무료 아님) → 무료한도 초과 시 폴백. **OpenRouter** = 무료지만 **200 req/day·20/min 빡센 rate limit**으로 스윕 throughput 상한이 큼. **로컬 서빙** = 무료지만 **tool이 빠르고 결정적이 되어 stochastic-remote 성격 상실 + GPU 추가 필요 → HLE 재현 목적 훼손**(그래서 최후·비채택).
 - **caveat/리스크**:
-  - **GLM 무료 1000 req/day 일일 한도** — 스윕(동시성 24–48 × ~130분 × 여러 run) 호출량이 초과 가능 → 초과 시 (a) **DeepSeek-v4-flash 유료 폴백**(총 몇 $) 또는 (b) **서브셋/동시성 축소로 한도 내 유지**. **record→replay로 GLM 호출을 1회 녹화분에 고정**하면 스윕 반복이 GLM을 재호출하지 않아 한도 압박 크게 완화(권장, §4-4-3).
+  - **GLM 무료 1000 req/day 일일 한도** — 스윕(동시성 24–48 × ~130분 × 여러 run) 호출량이 초과 가능 → 초과 시 (a) **DeepSeek-v4-flash 유료 폴백**(총 몇 $) 또는 (b) **서브셋/동시성 축소로 한도 내 유지**. **record→replay**(GLM 호출을 녹화분에 고정 → 스윕 반복이 GLM 재호출 안 함)로 한도 압박 크게 완화. **단 원격 API 지연은 시점마다 다르므로 "1회 녹화"가 아니라 다중-window 녹화로 개정 — §4-4-4 참조.**
   - **rate-limit 스로틀**은 throughput 절대값을 낮추나 **stochastic 성격엔 부합**(절대비교 안 하므로 무해).
   - **무료 Flash의 tool 출력 품질**: 정확도(정답률)는 우리 관심 아님(throughput만) — 단 **tool 실패율(코드 생성·`<answer>`/`\boxed` 포맷 준수 실패)이 워크로드 형상을 바꿀 수 있어** **스모크 1회로 확인**.
 
@@ -198,8 +198,33 @@ export CUDA_VISIBLE_DEVICES=1,2                 # Deployment A(TP2). B는 오케
 - **conda 환경**: launch 스크립트 기본 `vllm1`(오케스트레이터)·`retriever-clean`(FAISS) — 우리는 venv 기반이라 **conda 환경 구축 필요**(확인 필요).
 - **Continuum 미구현** → default/tr만.
 
-#### 4-4-4. 스윕/지표
-- 동시성 스윕(**논문 5090 케이스 C=24·32·40·48 참조**), **default vs tr**, throughput(**steps/min**) **windowed**(정상상태 구간). record→replay로 GLM tool 지연을 1회 녹화 후 replay(권장, 한도 완화). 기대: stochastic tool → **tr이 KV hit 희생하고 util 택함**(Fig 4c·5c).
+#### 4-4-4. 스윕/지표 — ★ 다중-window 녹화 + replay (원격 API 지연 변동 반영)
+> **배경(지도교수 피드백)**: HLE tool = 외부 GLM API라 지연이 **시간대·서버부하·rate-limit에 좌우**(같은 호출이 off-peak ~2s, peak ~15s). 지연이 바뀌면 **duty d = t_reason/(t_reason+t_tool)** 가 바뀌고 **R = k_fit·d** 도 바뀌어 **tr/default 결과가 시점마다 달라질 수 있다.** → "여러 시점 window"로 측정해 이를 검증해야 함. **기존 "1회 녹화 후 replay"는 이를 반영 못 하므로 아래로 개정.**
+
+**A. 다중-window 녹화 (하루 ~24h 분산, N=3~4 window, peak/off-peak 포함)**
+- 서로 다른 N개 시점 window에서 tool 지연 녹화. 각 window는 **median + tail(p95/p99)을 특성화할 만큼 샘플 확보**.
+- GLM 무료 **1000 req/day는 window 간격·pacing으로 준수**(호출량이 크면 **2일 분산** 허용).
+
+**B. 비용 절감 — 패턴/타이밍 분리 (orchestrator 24h 미점유)**
+- **tool 호출 패턴(프롬프트)은 짧게 1회만 확보**(orchestrator+retriever 잠깐 기동, GPU 짧게 점유; 스모크로 이미 검증됨) → 그 호출 프롬프트 집합을 저장.
+- **각 window에는 이 저장된 호출들을 API로 던져 지연만 샘플링**(GPU 미사용·경량 스크립트, orchestrator 불필요). → GPU를 24h 잡지 않고 지연 변동만 다시점 수집.
+
+**C. 로깅**
+- **호출별**: (지연 latency, tool 종류 search/answer/enhance_reasoning, 성공/실패·재시도 횟수, timestamp, window_id).
+- **window별 유효 duty d 산출** — `d = Σt_reason / Σ(t_reason + t_tool)`. **d가 window마다 달라지는 것 자체가 핵심 관측치.**
+
+**D. replay & 분석**
+- **주 비교(공정)**: **window 통합(대표) 분포**를 tr·default에 **동일 replay**. 스윕 dims 유지 — **default vs tr, C=24·32·40·48, REPEAT=3**, throughput(**steps/min, windowed 정상상태**)·KV hit·p95·R모델(k_fit·d, 예측U vs 실측U).
+- **robustness(교수 우려 직답)**: **각 window 분포를 개별 replay** → **tr–default 격차가 window에 걸쳐 안정적인가/어떻게 변하는가** 보고.
+- **★ R모델 연결(안정성 체크 → 모델 검증으로 승격)**: window마다 d가 다르니 **R=k_fit·d 도 다름** → **"API 상태로 d가 이동할 때 tr/default 결과가 R 예측대로 움직이는가"** 를 검증. (TraceLab의 tool-scale duty 축, SWE의 decode-heavy 축에 이어 **HLE는 '외부 API가 자연 생성하는 duty 이동' 축**으로 R모델을 검증.)
+- 기대: stochastic tool → **tr이 KV hit 희생하고 GPU util 택함**(논문 Fig 4c·5c).
+
+**E. ★ 게이트 추가 (녹화 후 정지)**
+- 다중-window 녹화 완료 후 **(window별 지연 분포 + 유효 d)를 보고·정지** → **승인 후 replay 스윕**.
+
+**공통 caveat(유지)**:
+- **hit 오염 주의(P1 프로파일링 계승)**: 보고 hit는 default에서 waiting-큐 재검사로 과소평가 → `/metrics`의 **`vllm:prompt_tokens_by_source{source="local_compute"}`** 로 참 hit(cached/total) 병기. `router.py` 미수정.
+- **Continuum 미구현** → **tr vs default(vLLM)만**. 논문상 HLE는 tr–Continuum 격차가 가장 좁은(코스트모델 가장 민감) 워크로드 → caveat 기록.
 
 ### 4-5. 스윕 조건 (독립변수 = 동시성)
 - **C 범위**(논문 parallel workflow number 참조):

@@ -725,6 +725,22 @@ def get_llm_response(model,messages,temperature=1.0,return_raw_response=False,to
                            max_tokens=max_length, extra_body={"thinking": {"type": "disabled"}})
                 if tools:
                     _kw['tools'] = tools
+                # P3 pattern-capture (env-gated): log GLM request shape for the multi-window
+                # latency sampler. Records the request (no keys). Off unless P3_GLM_CAPTURE set.
+                _cap = os.getenv("P3_GLM_CAPTURE")
+                if _cap:
+                    try:
+                        import json as _json
+                        with open(_cap, "a") as _cf:
+                            _cf.write(_json.dumps({
+                                "model": model,
+                                "messages": updated_messages,
+                                "max_tokens": max_length,
+                                "temperature": temperature,
+                                "thinking_disabled": True,
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
                 chat_completion = glm_client.chat.completions.create(**_kw)
                 if return_raw_response:
                     answer = chat_completion
