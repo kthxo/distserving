@@ -101,3 +101,73 @@
   - **★ 시간변동 조기 확인**: 1-tick 검증(search 1.6–3.6s) → 기동 첫 tick(search 7.6–11.3s) — 같은 프롬프트인데 지연 상승(=측정 대상 현상).
 - **판정: 1·2단계 완료, 정지.** 24h 후 사용자 재호출 시 3단계(window별 분포·d·성공률 표 + 게이트).
 - 가드레일: router.py 무수정, 격리 복사본(*_p3), 키 미기재(env·헤더만), GPU0 미접촉.
+
+### B-6. ★ 3단계 — 녹화 분석 + 게이트 (2026-07-20, GPU 미사용)
+384샘플(search 192 + answer 192, 24h, 15분 간격, 성공 100%)을 UTC 4h window(6개)로 분할. `figures/p3_hle_window_latency.png`.
+- **t_reason(Nemotron-8B 턴 GPU 시간) = median 14.0s**(스모크 48샘플). **FAISS = 0.32s 상수**. t_tool = GLM지연 + (search면 FAISS).
+
+**window별 지연(median/p95, robust) + 유효 d = t_reason/(t_reason+t_tool):**
+| window(UTC) | n | srch med/p95 | ans med/p95 | tool med | **eff d** |
+|---|---|---|---|---|---|
+| 00–04 | 64 | 1.5/5.6 | 1.5/57.5 | 1.8 | **0.887** |
+| 04–08 | 64 | 3.2/9.9 | 2.8/30.6 | 2.9 | 0.830 |
+| 08–12 | 64 | 1.9/9.4 | 3.0/26.4 | 2.7 | 0.839 |
+| 12–16 | 64 | 3.3/4.6 | 3.0/30.6 | 3.1 | 0.820 |
+| **16–20** | 64 | 3.9/11.5 | 4.0/51.8 | 4.2 | **0.770** (peak, 최저 d) |
+| 20–24 | 64 | 1.7/4.5 | 2.1/45.3 | 2.0 | 0.876 |
+- **전체 24h tail(표본 두꺼움)**: search med 2.0 p95 11.2 p99 23.3 max 38.6 / answer med 2.9 p95 **48.8** p99 **67.1** max **98.0**.
+
+**게이트 판정:**
+- **(a) window 간 d 변동**: **유의미하나 median 기준 moderate** — d 0.770~0.887(spread 0.116, ×1.15). **peak(16–20)에서 tool 지연 최고(med 4.2s)→d 최저(0.770), off-peak(00–04·20–24)에서 최저 지연→d 최고**(peak/off-peak 패턴 뚜렷). 단 **median d 변동이 작은 이유 = t_reason(14s)이 median t_tool(2–4s)을 지배**. **★ 진짜 stochastic은 tail**: answer p95가 window별 26→57s로 크게 변동, 개별 spike 최대 98s(t_reason 초과) — 이 tail 이벤트가 tr의 f(t)를 시험.
+- **(b) R모델 시험 셋업 가능**: d가 window간 이동(0.77~0.89) + tail 분포가 window별 상이 → **per-window replay로 "d/지연분포가 이동할 때 tr/default가 R=k_fit·d 예측대로 움직이나" 시험 가능**. (k_fit·U는 스윕에서 실측; 여기선 d축 lever 확보.)
+
+**→ 3단계 완료·정지. replay 스윕은 별도 승인 대기.** (스윕 승인 시 orchestrator/retriever 재기동 → 통합분포 주 비교 + window별 개별 replay + R모델.)
+
+### B-7. replay 스윕 — 실행 중 (2026-07-20)
+- **재기동**: 오케스트레이터(Nemotron-8B) GPU1 단독(replay는 tool=sleep이라 retriever/GLM 불필요, GPU2 미사용). **GPU 유휴 확인**: GPU1 유휴 확인 후 기동, GPU0 유휴(타 사용자 종료)·GPU2 타 사용자(suuinmoon/K-Search) 미접촉. **KV 풀 = 502,944 tok**(block16×31434).
+- **HLE 트레이스**(`prep_hle_trace_p3`, 신규): smoke5b 턴 구조(N search 1~9 + 1 answer + final) + **24h 지연 분포 그대로 sampling(tail 보존, max 98s)** + input 성장(150→15k tok). 256세션/1271턴, tool_duration median 2.7s·p95 24.4s·max 98s. 고정 seed → tr/default 동일 트레이스(공정).
+- **스윕**(`run_serving_eval_hle_p3`, 신규 격리): default vs tr, **C=24·32·40·48, NPROG=96, REPEAT=3**, --stream. 참 hit=`local_compute` 병기, 샘플러 --gpus 1(U). 
+- **⚠️ 정직한 사전관찰**: input median 2952 → **fit ~170 ≫ C=48** → default 스래싱 약할 수 있음(단 후반 턴 15k context×C에서 압박 가능). 스모크: default C=24 thru 0.745p/s·hit 0.737. **tr≥default 예상하되 gap은 KV 여유로 작을 수 있음 → 실측·정직 기록.**
+
+### B-8. ★ replay 스윕 결과 + 게이트 (2026-07-20) — 정직한 null-ish
+`figures/p3_hle_sweep.png`. 3회 평균, 참 hit=local_compute(=reported hit, 괴리 없음).
+| C | def thru | tr thru | Δ | def hit | tr hit | def p95 | tr p95 | def U | tr U | tr k_fit |
+|---|----------|---------|---|---------|--------|---------|--------|-------|------|----------|
+| 24 | 0.905 | 0.901 | −0% | 0.918 | 0.934 | 52.9 | 52.8 | 0.70 | 0.66 | 17.6 |
+| 32 | 1.163 | 1.159 | −0% | 0.959 | 0.941 | 52.7 | 53.5 | 0.68 | 0.70 | 21.3 |
+| 40 | 1.269 | 1.257 | −1% | 0.937 | 0.962 | 46.3 | 47.4 | 0.68 | 0.67 | 23.3 |
+| 48 | 1.330 | 1.308 | −2% | 0.947 | 0.939 | 48.2 | 46.3 | 0.66 | 0.67 | 25.4 |
+
+**결과 해석 (정직):**
+- **tr ≈ default (Δthru −0~−2%, hit 양쪽 0.92~0.96 高, p95 46~53s 동일)** — **tr≥default(item2)는 성립(tr 열세 아님)하나 gap≈0**.
+- **원인 = 스래싱 없음**: HLE input median 2952 → **fit≈170 ≫ C=48**(KV 502,944). default가 KV 과구독 안 함 → hit 붕괴 없음 → **tr이 막을 스래싱이 없음** → tr=default. (참 hit=reported hit 확인 → 숨은 스래싱 없음.) → **R모델 핵심 주장과 정합**: "tr은 default가 스래싱할 때만 이긴다", 여기선 default 무붕괴.
+- **item3(tail의 f(t)) — 관찰 불가·정직 기록**: KV 여유(fit≫C)라 긴 acting(최대 98s) 프로그램도 KV에 여유롭게 잔류 → **tr의 f(t) evict/감쇠가 발동할 압력 자체가 없음**. → 논문의 f(t) regime(5090 작은 KV=스래싱)을 이 HW(8B on 96GB)에서 재현하려면 **KV 축소(gpu-mem-util↓로 fit≈C)** 필요(후속 옵션).
+- **★ R모델 한계(heavy-tail) 발견**: R=k_fit·d ≫1(14.5~20.8) → U≈1 예측이나 **실측 U≈0.67**. **heavy-tail(98s acting) 때문에 순간순간 다수 프로그램이 off-GPU → mean-d 기반 R이 U를 과대예측**. → R모델은 heavy-tail 워크로드에서 mean-d로는 U를 못 맞춤(정직한 한계, tail-aware duty 필요).
+- **item4(window별 replay)**: median d-lever ×1.15로 약한 데다 **주 결과가 무붕괴(tr=default)라 window별로도 tr=default** → R모델 d-축 검증 **불가(참고용, 정직 기록)**.
+
+**→ P3 replay 스윕 완료·게이트 정지.** 핵심: 이 HW에선 HLE 무붕괴 → tr=default(R모델 정합), f(t) tail-handling은 KV 축소해야 관찰 가능(후속).
+
+### B-9. ★ KV-축소 후속 스윕 — 붕괴 레짐 재현 (2026-07-20)
+**KV 축소**: gpu-mem-util 0.90→**0.32** → **C_total 502,944 → 101,840 tok**(1/4.9), **fit≈34.5**(C=24·32 이하 / C=40·48 초과 = 걸침). 동일 24h tail 트레이스·동일 스윕 dims. `figures/p3_hle_kv_contrast.png`.
+
+| C | 레짐 | def thru | tr thru | Δ | def hit(true) | tr hit(true) | Δhit | def U | tr U | **tr paused(mean/max)** | def paused |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 24 | <fit | 0.840 | 0.827 | −2% | 0.668 | 0.693 | +4% | 0.73 | 0.71 | 0.52 / 9 | 0.00 |
+| 32 | <fit | 0.998 | 0.960 | −4% | 0.632 | 0.666 | +5% | 0.70 | 0.66 | 1.81 / 14 | 0.00 |
+| 40 | >fit | 1.074 | 0.987 | −8% | 0.621 | 0.659 | +6% | 0.75 | 0.64 | 3.16 / 22 | 0.00 |
+| **48** | **>fit** | 1.063 | 1.039 | −2% | **0.513** | **0.654** | **+28%** | 0.78 | 0.67 | **5.13 / 20** | 0.00 |
+
+**(a) C>fit에서 flip? — hit는 YES, throughput은 NO(정직)**
+- **default hit 붕괴 재현**: C=48(>fit)에서 true hit **0.62→0.513**(reported 0.38). **tr은 전 C에서 hit 평탄(0.65~0.69)** → **C=48에서 tr +28%**. → **논문의 "tr이 스래싱 억제" 재현.**
+- **그러나 throughput은 tr이 −2~−8%로 열세**(논문 Fig4c의 tr 1.48× 이득 **미재현**). **원인(메커니즘)**: HLE는 **tool-wait이 wall-time을 지배**(tool median 2.7s·tail 98s, d~0.82) → KV 스래싱의 재프리필 비용이 throughput에 미치는 영향이 작음 → tr이 hit를 지켜도 throughput으로 환산 안 됨. 반면 TraceLab/SWE는 prefill/decode-bound라 스래싱이 throughput을 직접 붕괴시켜 tr이 크게 이겼음. **→ "tr 승리는 스래싱이 throughput을 지배할 때만"**(R모델의 조건부성을 워크로드 축으로 보강).
+
+**(b) f(t) tail 처리 — ★ 발동 확인**
+- **tr paused가 C와 함께 증가(0.52→1.81→3.16→5.13, max 20~22), default는 항상 0.00.** tr acting≈12~13(긴 tool-wait 프로그램 상주). → **KV 압력 상승 시 tr의 f(t)가 실제로 프로그램을 pause/evict해 resident를 용량 내로 유지** → hit 방어. **큰-KV(무붕괴)에선 발동 안 하던 메커니즘이 축소-KV에서 정상 작동**.
+
+**(c) R모델 heavy-tail 한계 — 붕괴 레짐에서도 지속**
+- R=k_fit·d=14.0~15.7 ≫1 → 예측 U=1.00, **실측 U=0.64~0.71**. 두 레짐 모두 과대예측. **원인: heavy-tail acting(12~13 프로그램이 상시 tool-wait, tail 98s)로 순간 off-GPU 비율이 큼** → mean-d 기반 R이 U를 못 맞춤. **→ heavy-tail 워크로드엔 tail-aware duty 필요(모델 한계 확정).**
+
+**(d) 방법론 발견 — reported hit의 default 과소보고 실증**
+- C=48 default: **reported 0.380 vs true(local_compute) 0.513 (gap +13.3%p)**. 스래싱 시에만 발생(C≤40은 gap≈0). → **reported hit만 쓰면 default 붕괴를 과장**. P1 발견을 정량 확인, 참 hit 병기의 필요성 입증.
+
+**→ 대조 결론**: 같은 워크로드·트레이스에서 **KV만 1/4.9로 줄이자 무붕괴(tr=default) → 붕괴(default hit 0.513 vs tr 0.654, f(t) 발동)**로 전환. **fit이 C를 넘는지가 tr 개입 여부를 결정**(R모델 정합). 단 HLE에선 tool-wait 지배로 **hit 방어가 throughput 이득으로 전환되지 않음**(논문 대비 정직한 차이).
