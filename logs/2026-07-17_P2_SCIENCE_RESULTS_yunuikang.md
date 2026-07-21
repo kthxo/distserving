@@ -51,3 +51,272 @@
 ---
 
 **→ SAB 실제 데이터가 password-protected라 사용자 신청 대기로 보류. P3(HLE)를 선행함** (2026-07-18)
+
+---
+---
+
+# B. P2 재개 — Phase A 재확인 (2026-07-20)
+
+## B-0. ★ 정정 기록 — 이전 Phase A의 데이터 판정 오류
+
+**정정**: 2026-07-17 Phase A는 SAB 입력 데이터를 **"password-protected SharePoint → 접근 불가(blocker ①)"**로 판정했으나, 이는 **오판정**이었다.
+
+- **오판 경위**: HF `osunlp/ScienceAgentBench` 데이터셋 **preview(메타데이터 parquet)만** 확인하고, 실제 데이터 폴더(`benchmark/datasets/`)는 별도 배포임을 확인하는 단계에서 SharePoint 링크의 비밀번호 요구를 "접근 권한 없음"으로 결론지었다.
+- **실제**: 해당 zip은 **공개 비밀번호(`scienceagentbench`)**로 누구나 해제 가능한 배포물이었다(SAB README에 명시되는 관행적 보호 — 크롤러/LLM 학습오염 방지 목적이지 접근 제한이 아님).
+- **교훈**: "비밀번호 요구 = 접근 불가"로 단정하지 말 것. 배포 문서(README/논문 부록)에서 공개 비번 여부를 먼저 확인해야 했다. **blocker ①은 실재하지 않았고, 이로 인해 P2가 3일간 불필요하게 보류**되었다.
+- **현 상태**: 사용자가 데이터 확보·배치 완료 → `distserving/scratch/sab/benchmark/` → **blocker ① 해소**.
+
+## B-1. 데이터 무결성 검증 — **판정: PASS**
+
+| 항목 | 실측 | 판정 |
+|---|---|---|
+| `benchmark/datasets/` | 414 files, **3.8GB**, 최상위 76 entries | ✅ 실데이터 존재 |
+| `benchmark/gold_programs/` | **102** `.py` | ✅ |
+| `benchmark/eval_programs/` | 224 files, 36MB | ✅ |
+| `benchmark/scoring_rubrics/` | **102** `.json` | ✅ |
+| 태스크 메타(HF parquet, 캐시됨) | **102 rows × 12 cols** (`verified-00000-of-00001.parquet`) | ✅ 논문 102 태스크 일치 |
+
+**메타 ↔ 로컬 파일 교차검증 (전수)**
+- `gold_program_name` → `gold_programs/` 존재: **누락 0/102**
+- `eval_script_name` → `eval_programs/` 존재: **누락 0/102**
+- `dataset_folder_tree` 루트 → `datasets/<root>/` 존재: **누락 0/71**(고유 데이터폴더 71개, 태스크가 폴더를 공유)
+- ※ `src_file_or_path`는 **원본 GitHub 저장소 경로**(로컬 경로 아님) — 15건 NaN. 하네스가 쓰지 않음(upstream `format_task_dict` 미참조 확인). 무해.
+
+**도메인 분포**: Psychology/CogSci 28, GIS 27, Bioinformatics 27, Comp.Chemistry 20 (계 102).
+
+**입력 크기(레짐 지도용 사전 재료, chars)**
+| 필드 | median | p95 | max |
+|---|---|---|---|
+| `task_inst` | 304 | 575 | 1,075 |
+| `domain_knowledge` | 534 | 1,124 | 1,753 |
+| `dataset_folder_tree` | 74 | 1,165 | 2,597 |
+| `dataset_preview` | 849 | 4,407 | 24,995 |
+| **합산 instruction** | **1,952** | **5,415** | 25,969 |
+
+→ instruction 토큰 ≈ **median 558 / p95 1,547**[추정, chars/3.5]. **단 fit 계산의 `program_input_tokens`는 instruction이 아니라 에이전트 궤적 누적 컨텍스트**이므로 이 값이 아님 — 녹화 실측으로 확정한다(P1 SWE: median 7,897).
+
+## B-2. GPU 배치 — **판정: GPU1 단일-GPU 폴백 확정**
+
+- 실측(2026-07-20): GPU0 유휴 / **GPU1 유휴(2MiB)** / **GPU2 = suuinmoon 점유**(PID 1788560 `generate_kernels_and_eval.py`, K-Search stage16, 1,044MiB, 진행중).
+- 사용자 지정 규칙("GPU2 suuinmoon 아직 점유면 불가 시 GPU1 단일-GPU 32B 폴백")에 따라 **Deployment A′ = GPU1 단일-GPU Qwen3-32B**로 확정. **GPU0·GPU2 미접촉**(goguma STEP5 / K-Search 무간섭).
+- **KV 축소 예상**: TP2는 KV 총 ~120GB → `C_total = 456,944 tok`. 단일 96GB는 weights ~65GB(BF16) 차감 후 KV ≈ 23GB → **C_total ≈ 85–95k tok**[추정, 기동 로그 `cache_config_info`로 확정 예정].
+- **★ 실험적으로는 유리**: fit = C_total/program_input이 **TP2 대비 ~1/5**로 작아져, 낮은 C에서도 붕괴 레짐(C>fit)에 진입 가능 → **fit×d 레짐 지도에서 저-fit 구간 점 확보**(4090 앵커와 Pro6000 사이를 메움). C 범위는 기동 후 실측 fit에 맞춰 확정.
+- **caveat(로그 상수)**: Deployment A′는 TP2가 아니므로 **P1(SWE·TraceLab) 절대값과 직접 비교 불가**. P2 결론은 **동일 배치 내 default vs tr 상대비교** + **fit×d 축 위치**로만 주장한다.
+
+## B-3. 하네스 이식 스코핑 — **판정: 저위험·소규모 (진행 가능)**
+
+- **upstream 확보 완료**: `OpenHands/OpenHands` @ tag **`1.2.1`** (repo가 `All-Hands-AI/OpenHands` → `OpenHands/OpenHands`로 이름 변경, `main`에는 `evaluation/benchmarks/` 없음 → **태그 `1.2.1` 고정 필수**). 참조본 → `scratch/sab/_upstream_ref/`(저장소 밖).
+  - `run_infer.py` 9,486B / **280줄**, `Dockerfile.evaluator`, `post_proc.py`, `README.md`, `scripts/run_infer.sh`. (`Dockerfile`은 404 — 샌드박스는 배포 이미지 사용이라 불필요.)
+- **버전 정합 리스크: 낮음.** upstream SAB가 import하는 `evaluation.utils.shared` 심볼 **12개 전수 존재 확인**(로컬 OpenHands 1.2.1과 동일 버전): `EvalMetadata, EvalOutput, codeact_user_response, compatibility_for_eval_history_pairs, get_default_sandbox_config_for_eval, get_metrics, get_openhands_config_for_eval, make_metadata, prepare_dataset, reset_logger_for_multiprocessing, run_evaluation, update_llm_config_for_completions_logging` → **API 시그니처 수정 불필요**.
+- **재사용(수정 없음)**: `evaluation/utils/shared.py`.
+- **이식(신규, ~35줄 이식)**: `swe_bench/run_infer.py:618-655,754-758`의 ThunderAgent 글루 = `_make_thunderagent_program_id`(sha1(instance_id:pid)) + `_release_thunderagent_program`(POST `/programs/release`) + `OPENHANDS_PROGRAM_ID` env 설정/복원 + `finally` 해제. **program_id prefix만 `swe-` → `sab-`로 변경.**
+- **신규(SAB 고유부, upstream 그대로)**: `format_task_dict`(데이터 경로/instruction 조립), `initialize_runtime`(workspace 생성 + 데이터셋 `copy_to`), `complete_runtime`(pred program 회수), instruction 템플릿.
+- **로컬 수정 필요 2건**: ① `LOCAL_DATASET_PATH`를 `scratch/sab/benchmark`로 지정, ② `load_dataset('osunlp/ScienceAgentBench', split='validation')` — 로컬 캐시 parquet은 split명 **`verified`** → 오프라인 로드 경로로 고정.
+- **작업량 판정**: **~0.5일**(upstream 280줄 + 글루 35줄, API 정합 확인 완료). 이전 Phase A의 "중간~높은 작업량·버전 정합 리스크" 평가는 **하향 정정**.
+- **파일명(격리)**: `evaluation/benchmarks/scienceagentbench_yunuikang/run_infer_yunuikang.py`. `scheduler/router.py` 및 기존 `swe_bench/` **무수정**.
+
+## B-4. docker 재확인 — **판정: PASS**
+- `docker 29.1.3`, `docker ps` OK, docker 그룹 소속 ✅.
+- 샌드박스 이미지 `docker.io/xingyaoww/openhands-eval-scienceagentbench` **manifest 조회 성공**(11 layers, 압축 ≈**2.14GB**) → pull 가능.
+- 디스크: `/` 799GB free, `/home` 223GB free ✅ (P1 SWE 이미지 2개 3.93GB씩 잔존, 무해).
+- 외부망 정상(GitHub API/raw 접근 확인).
+
+## ★ B-5. Phase A 재확인 결론 — **blocker 없음**
+| Phase A 항목 | 판정 |
+|---|---|
+| ① 데이터 | ✅ **해소**(B-0 정정, B-1 전수 검증 PASS) |
+| ② GPU 배치 | ✅ **확정**(GPU1 단일-GPU 폴백, 사전 지정 규칙 적용 — 사용자 결정 불요) |
+| ③ 하네스 이식 | ✅ **저위험·~0.5일**(API 12/12 정합) |
+| ④ docker | ✅ PASS |
+
+**사용자 결정/제공 필요 항목: 없음.**
+**→ Phase A 정지. 이식 착수 승인 대기.**
+
+---
+
+# C. Phase B 실행 (2026-07-20)
+
+## C-1. ★ Deployment A′ 기동 — C_total 확정·고정
+
+`scripts/_serve_vllm_gpu1_yunuikang.sh` (신규 격리본; TP2 스크립트 무수정). GPU1 단일, `CUDA_DEVICE_ORDER=PCI_BUS_ID` 명시 고정(디바이스 "1" = 96GB 카드 확정), `MML=32768 GMU=0.92`, Qwen3-32B.
+
+| 항목 | 실측(기동 로그) |
+|---|---|
+| Available KV cache memory | **24.55 GiB** |
+| **★ C_total (고정)** | **100,544 tokens** (`kv_cache_utils.py:2146`) |
+| Max concurrency @32,768 tok/req | 3.07× |
+| GPU1 점유 | 91,524 MiB / 97,887 |
+| 기동 | CUDA graph capture 완료, `/health` OK, `/v1/models` = Qwen/Qwen3-32B |
+
+- **추정 대비**: B-2의 [추정] 85–95k → **실측 100,544** (추정이 ~6% 과소). 이하 모든 fit은 **100,544**로 계산한다.
+- **TP2 대비**: 456,944 → 100,544 = **×0.220**. 예상대로 fit이 ~1/4.5로 축소 → 저-fit 레짐 점 확보에 유리.
+
+## C-2. 하네스 이식 — 완료
+
+- 신규: `evaluation/benchmarks/scienceagentbench_yunuikang/run_infer_yunuikang.py` (+ `__init__.py`). 기존 `swe_bench/`·`scheduler/router.py` **무수정**.
+- upstream(tag `1.2.1`) 대비 변경 3점: ① `LOCAL_DATASET_PATH` → `scratch/sab/benchmark`(env `SAB_BENCHMARK_PATH` 오버라이드 가능), ② `load_sab_dataset()` — 캐시 parquet 직접 로드(split명 `verified`, 오프라인·재현성), ③ ThunderAgent 글루 이식(`sab-` prefix, `finally` 해제).
+
+## C-3. ★ 예상 못한 이슈 — OpenHands 의존성 미설치 (해결)
+
+- **발견**: P1의 SWE 녹화는 **mini-swe-agent**(`mini-extra swebench`)로 수행되어 **OpenHands 런타임이 이 서버에서 한 번도 구동된 적 없음**. 메인 venv에 `openhands` 미설치(`ModuleNotFoundError`), `termcolor`조차 없음. → B-3의 "저위험" 판정은 **API 시그니처 정합만 근거**였고 **런타임 구동 가능성은 미검증**이었다(판정 근거의 한계를 정직히 기록).
+- **의존성 규모**: pyproject `dependencies` **~85개** — `playwright`, `browsergym-core`, `poetry`, `pythonnet`, `google-cloud-aiplatform`, `kubernetes`, **`openai==2.8` 핀** 등. 메인 venv(vllm 0.24.0 / torch 2.11.0+cu130)에 설치하면 **openai 핀 충돌로 서빙 스택 파손 위험**.
+- **조치**: **별도 venv 완전 격리** → `/home/yunuikang/yunuikang_work/.venv_oh_yunuikang` (Python 3.12.3)에 `pip install -e .`. 메인 venv **무변경** → vLLM 서버(:8000)와 프록시는 기존 venv 그대로 사용. 두 venv는 HTTP로만 통신하므로 결합 없음.
+
+## C-4. 스모크 시도 — **현재 실패(미통과). 게이트 정지·보고**
+
+이식 자체는 검증되었으나 **OpenHands 런타임 이미지 빌드**에서 막혔다. 발견 순서대로 정직히 기록한다.
+
+### 통과한 것
+| 검증 | 결과 |
+|---|---|
+| 격리 venv에 OpenHands 설치 | ✅ `openhands` 임포트 OK |
+| 하네스 심볼 12/12 임포트 | ✅ |
+| 이식 하네스 임포트·데이터 로드 | ✅ **102 태스크**, `format_task_dict` 정상(`dataset_path=/benchmark/datasets/clintox/`, `pred_program_name=pred_clintox_nn.py`) |
+| SAB 샌드박스 이미지 pull | ✅ 7.29GB(압축 2.14GB) |
+| 프록시 :9000 default + `--profile` | ✅ `router_mode=default` |
+| Deployment A′ 백엔드 | ✅ `:8000` health, C_total 100,544 |
+
+### 막힌 것 — 3연속 이슈 (2개 해결, 1개 미해결)
+
+**이슈 ① upstream 하네스가 `--config-file`을 무시** → 해결
+`get_llm_config_arg(args.llm_config)`가 `toml_file` 기본값 `'config.toml'`을 써서 내 격리 config를 못 찾고 `None` 반환 → `AttributeError: 'NoneType' has no attribute 'modify_params'`. **upstream 버그**(swe_bench는 `run_infer.py:849`에서 `args.config_file`을 넘김). 이식본에 동일 수정 적용(변경 ④).
+
+**이슈 ② `docker buildx` 미설치** → 해결
+`check_buildx()`가 False → OpenHands가 "컨테이너 내부라 docker 바이너리 없음"으로 **오판**하고 **호스트에서** `apt-get update`를 실행 → 비root라 exit 100. 원인은 호스트에 buildx 플러그인 부재(`docker-trust`만 존재). **root 없이 사용자 로컬 플러그인**으로 해결: `~/.docker/cli-plugins/docker-buildx` v0.35.0 설치(BuildKit v0.26.2 인식). 시스템·타 사용자 무영향.
+
+**이슈 ③ [미해결] 런타임 이미지 빌드 실패 — poetry/uv 불일치**
+`Dockerfile:182` exit **127**. 실제 실패 지점을 빌드 로그로 특정:
+```
+#18 1.168 Using virtualenv: /openhands/poetry/openhands-ai-5O4_aCHf-py3.12   ← poetry 정상 동작
+#18 1.304 bash: line 1: poetry: command not found                            ← 여기서 죽음
+```
+- 앞 3개 poetry 호출(`config set`, `poetry config`, `poetry env use`)은 **모두 성공** → poetry는 micromamba env에 정상 설치됨(conda-forge `poetry-2.4.1` 확인).
+- 죽는 곳은 `micromamba run -n openhands bash -lc 'test -f poetry.lock || poetry lock ...'` — **`bash -lc`(로그인 셸)이 `/etc/profile`로 PATH를 리셋**해 env의 poetry를 잃는다.
+- 이 분기를 타는 이유는 **`poetry.lock` 부재**. 근본 원인: **OpenHands 1.2.1은 `uv.lock`으로 이전했는데 런타임 Dockerfile은 아직 `poetry.lock`을 전제**(repo 루트에 `uv.lock` 1.1MB 있음, `poetry.lock` 없음) → upstream 자체 불일치. `test -f poetry.lock ||` 폴백이 있으나 그 폴백이 PATH 버그로 깨져 있음.
+- 우회 실현성 확인: 베이스 이미지에서 `poetry lock` 직접 시도 → **실패**(`python 3.11.10 is not supported by the project (^3.12,<3.14)`). 베이스 python이 3.11이라 컨테이너 밖 생성은 불가; python3.12+poetry 환경에서 별도 생성해야 함.
+
+### 판단
+이식 코드는 정상이고 남은 것은 **upstream 빌드 체인의 버전 불일치 1건**이다. 다만 이미 이슈 3건 연속이라, 진행 방식을 사용자와 정하는 편이 낫다고 판단 → 게이트 정지.
+
+---
+
+# D. 옵션 B — mini-swe-agent 스캐폴드로 전환 (2026-07-20)
+
+## D-0. ★ 방법론 명시 (정직 기록 — 결론 해석에 필수)
+
+**Science 점은 논문의 OpenHands CodeAct 스캐폴드가 아니라 `mini-swe-agent` 스캐폴드로 측정한다.**
+
+- **전환 사유**: OpenHands 런타임 이미지 빌드가 upstream **poetry/uv 불일치**로 막힘(C-4 이슈 ③). 이슈 3연속(①`--config-file` 무시 ②buildx 부재 ③poetry.lock)이라 rabbit hole로 판단, 사용자 승인 하에 폐기.
+- **프레이밍(이 로그·그래프·결론 전반에 적용)**:
+  > **"스캐폴드를 P1 SWE와 통일해 *워크로드 효과만* 분리한다. 논문 OpenHands-on-Science의 충실 재현은 아니다."**
+- **이 프레이밍이 갖는 이점**: fit×d 레짐 지도에서 SWE 점과 Science 점이 **동일 스캐폴드·동일 모델·동일 배치**를 공유하므로, 두 점의 차이는 **워크로드(버그수정 vs from-scratch 프로그램 작성)** 에서만 온다 → 스캐폴드가 교란변수가 아니다.
+- **이 프레이밍이 갖는 한계**: 논문 Fig 4·5의 Science 절대값과 직접 대조 불가. Science의 d·fit은 **mini-swe 스캐폴드 조건에서의 값**으로만 해석해야 한다.
+
+## D-1. 배선
+
+- 신규(격리, mini-swe 패키지 **무수정**):
+  - `scripts/run_sab_minisweagent_yunuikang.py` — SAB 배치 러너(`run/extra/swebench.py` 패턴 이식).
+  - `scripts/sab_qwen32b_config_yunuikang.yaml` — **P1 SWE config와 system/format/observation 템플릿 동일**, instance_template만 SAB용(from-scratch 작성 워크플로)으로 교체. `step_limit=40`, `timeout=300`(과학 프로그램은 학습·플로팅으로 SWE보다 느림), `MPLBACKEND=Agg`.
+  - `scripts/run_sab_record_mini_yunuikang.sh` — 프록시(:9000 default `--profile`) + 러너.
+- **ThunderAgent 연동은 mini-swe에 이미 내장**되어 있었다: `models/vllm_model.py:131`이 `job_id`→`extra_body.program_id`로 보내고, `run/extra/swebench.py:231`에 `release_router_program()`이 있음. 러너에서 `job_id=instance_number`(1-based, 0은 폴백값이라 회피)로 배선하고 종료 시 release 호출. → **OpenHands 글루 이식이 불필요해짐**(옵션 B의 부수 이점).
+- 데이터 접근: `scratch/sab/benchmark/datasets`를 `/benchmark/datasets:ro`로 **bind-mount**(upstream은 태스크마다 copy_to; 읽기전용 마운트는 에이전트 관점에서 동등하고 GB급 복사를 회피).
+- 버그 1건 자체수정: `enumerate(df.iterrows())` 언패킹(`i,(idx,row)`).
+
+## D-2. ★ 스모크 — **통과** (1 태스크 → 6 태스크 확대 검증)
+
+1-태스크 스모크(`smoke1`)는 Submitted였으나 5턴으로 짧아 대표성 판정이 불가 → **6 태스크(`smoke6`, WORKERS=3, 19분 34초)로 확대**. **6/6 Submitted**, step_profiles 71 스텝.
+
+### (a) 태스크 진행률 — 대표적임 (flail 아님)
+| id | turns | obs | rc≠0 | fmt-err | py작성 | py실행 | 실행성공 |
+|---|---|---|---|---|---|---|---|
+| 1 | 14 | 11 | 4 | 2 | ✅ | ✅ | ✅ |
+| 2 | 18 | 17 | 9 | 0 | ✅ | ✅ | ❌ |
+| 3 | 12 | 9 | 4 | 2 | ✅ | ✅ | ❌ |
+| 4 | 13 | 12 | 6 | 0 | ✅ | ✅ | ✅ |
+| 5 | 10 | 7 | 3 | 2 | ✅ | ✅ | ❌ |
+| 6 | 4 | 2 | 1 | 1 | ✅ | ✅ | ✅ |
+
+- **프로그램 작성 6/6, python 실행 6/6, 성공 실행(rc=0) 3/6** → mini-swe가 SAB의 from-scratch 작성 워크플로를 **실제로 수행**한다. flail 아님.
+- **turns median=12** (P1 SWE median=16) — 동일 자릿수. 워크로드가 SWE보다 약간 짧다.
+- **format-error 궤적당 1.17** — **P1 SWE의 5.53보다 오히려 양호**. (원인은 동일: Qwen3 thinking이 `max_completion_tokens=2048`을 소진해 bash 블록을 못 뱉는 것. completion_tokens p95=2048=상한 → 절단 확인. **SWE와 동일 조건이므로 스캐폴드 통일 목적에 부합** — 수정하지 않는다.)
+- **tool 실패율 46.6%(27/58)** — 높아 보이나 **워크로드 고유 성질**: (i) SAB 태스크가 요구하는 과학 패키지(`deepchem` 등)가 OpenHands 샌드박스 이미지에 없어 `ModuleNotFoundError` → 에이전트가 sklearn/rdkit 등으로 대체 구현, (ii) from-scratch 코드의 반복 디버깅. **하네스 결함이 아니라 Science 워크로드 자체의 tool 실패율**로 기록한다.
+  - **caveat**: upstream SAB는 태스크별 conda 환경(`config_conda_env.py`)을 구성하나 본 실험은 단일 범용 이미지를 쓴다 → 실패율이 논문 조건보다 높을 수 있음. 서빙 측정(토큰·시간)에는 무해하나 **정확도(task success) 비교에는 쓰지 않는다.**
+
+### (b) ★ d (reasoning duty) — **0.9347**
+`Σreason(prefill+decode)=2,980.2s` / `Σtool=208.3s` → **d = 0.9347**
+
+| 워크로드 | d | 비고 |
+|---|---|---|
+| TraceLab | 0.289 | tool-heavy |
+| **Science** | **0.9347** | **decode-heavy (신규 점)** |
+| SWE | 0.996 | 최고 decode-heavy |
+| HLE | (원격 API 지배) | tool-wait 지배 |
+
+→ Science는 **SWE와 TraceLab 사이, SWE에 훨씬 가까운 decode-heavy**. 예상("중간 듀티")보다 높다.
+
+### (c) ★ heavy-tail — **존재하나 얇음 (HLE와 다름)**
+| 지표 | tool_call_s |
+|---|---|
+| median | 0.08s |
+| p95 | 2.51s |
+| p99 | 58.81s |
+| **max** | **189.56s** |
+| max/median | **2,406×** |
+| mean/median | 37.2× |
+
+- 최장 스텝 = `python pred_programs/pred_mat_feature_select.py` (**실제 모델 학습·특징선택 실행**) — 과학 워크로드다운 tail.
+- **단 tail이 매우 얇다**: 2위가 2.77s로 급락(189.6 → 2.77). 71스텝 중 1건만 tail.
+- **HLE와의 대비**: HLE는 원격 API 지연이 상시 tail이라 tool-wait이 wall time을 지배했으나, **Science는 tail이 희소해 총 tool 비중이 6.5%(1−d)에 그친다** → **HLE에서 관찰된 "R≫1인데 U가 낮은" 실패 모드는 재현되지 않을 가능성이 높다**[추정, 본 스윕에서 실측 검증].
+- **한계**: tail 표본 1건 = 6 태스크뿐. **본 녹화(더 큰 N)에서 재측정**해야 하며, tail이 두꺼워지면 결론을 갱신한다.
+
+### (d) ★ fit 산출 (C_total=100,544 고정)
+| 기준 | 값 | fit |
+|---|---|---|
+| 스텝 input median | 5,529 tok | **18.2** |
+| 프로그램당 max input median | 7,259 tok | **13.9** |
+
+→ **fit ≈ 14–18**. (참고: TraceLab fit≈25, SWE fit≈58 — 모두 TP2 기준이라 직접 비교 불가하나, **Deployment A′에서 Science는 저-fit 레짐**.)
+
+### (e) 스윕 C 범위 제안 (fit을 걸치게)
+**C = 8 · 16 · 24 · 32 · 48**
+- `C=8` ≪ fit → **음성대조**(양쪽 여유, 동률 예상)
+- `C=16` ≈ fit → 전이 개시
+- `C=24·32·48` > fit → **default 스래싱 활성 구간**
+
+**→ 스모크 게이트 정지. 진행률·d·heavy-tail 보고 완료.**
+
+## D-3. 본 녹화 완료 (102 태스크) + d·fit·tail 확정
+
+`run_sab_record_mini_yunuikang.sh full102` WORKERS=12, **3h40m**, 102/102 완주.
+- exit: **Submitted 79 / ContextLengthExceeded 16 / LimitsExceeded 7**. 완주율 77%.
+  - ContextLengthExceeded 16건: `dataset_preview`가 큰 태스크(최대 25k자)가 궤적 누적으로 32k 컨텍스트를 초과. **비정상 아님** — 긴-컨텍스트 프로그램이 trace에 포함되는 편이 서빙 측정에 대표적. (input p95=25,090 tok 확인)
+- canonical trace: `scratch/sab/sab_trace_32b.jsonl` (102 세션, 1,363 턴, schema_ok). 정규화는 `prep_swebench_trace_yunuikang.py` **무수정 재사용**(step_profiles→canonical 범용).
+
+### ★ 확정값 (C_total=100,544)
+| 지표 | 스모크(6) | **본 녹화(102)** |
+|---|---|---|
+| 스텝 수 | 71 | **1,363** |
+| **d** | 0.9347 | **0.9894** |
+| step input median | 5,529 | **6,214** |
+| **fit (step median)** | 18.2 | **16.2** |
+| fit (prog max median 7,256) | 13.9 | **13.9** |
+| **fit×d** | ~17 | **16.0** |
+| tool median | 0.08s | 0.077s |
+| tool p95 | 2.51s | 1.42s |
+| tool p99 | 58.8s | 18.7s |
+| tool max | 189.6s | **300.1s** |
+| tool>10s 비율 | 1.4% | **1.3%** |
+| completion 2048-절단율 | — | 20% |
+
+- **d=0.9894**: 스모크(0.9347)보다 상승, **SWE(0.996)에 근접**. Science는 예상("중간 듀티")과 달리 **고듀티 decode-heavy**.
+- **fit×d=16.0 ≫ 1**: 예측대로 **tr 지배 zone**(경계의 16배), f_sat=1/16≈0.06.
+
+### ★ heavy-tail = **희소·극단 (HLE의 상시 tail과 구조적으로 다름)**
+- max/median = **3,913×** (극단값 존재), 그러나 **>30s 스텝은 8건(0.6%), >10s는 18건(1.3%)** 뿐.
+- median 0.077s, p90 0.12s → **90%의 스텝이 tool≈0**(순수 decode). tool 총합은 wall time의 **1.06%**(1−d)에 불과.
+- **HLE 대비**: HLE는 원격 GLM API 지연이 *상시* tail이라 tool-wait이 wall time을 지배(d 낮음) → "R≫1인데 U 낮음" 발생. **Science는 tail이 희소해 1−d=1%** → HLE 실패 모드 **미재현 예측**(스윕에서 실측 검증 예정, 지시 4).
+- 최장 tail = 실제 과학 연산: prog70 `single_cell_analysis_de.py`(300s), prog2 `mat_feature_select.py`(181s), prog51 `brain_blood_qsar.py`(103s), prog97 `formation_energy_prediction.py`(102s) — 모델 학습·특징선택 실행.
+
+### ★ tail 경합-inflation 점검 (지시 1)
+- **간접 증거는 inflation 부정**: WORKERS 3→12(경합 4배↑)인데 tail이 **오히려 얇아짐**(p95 2.51→1.42s, tool>10s 1.4→1.3%). 경합이 부풀렸다면 반대여야 함.
+- **직접 검증 진행 중**: 최장 tail 4태스크(prog 70·2·51·97)를 **WORKERS=1(무경합)로 재측정** → 큰 스텝의 tool 시간이 재현되면 실제 연산(경합 아님) 확정. [결과는 D-4]
