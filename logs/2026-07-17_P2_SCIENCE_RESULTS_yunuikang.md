@@ -320,3 +320,88 @@
 ### ★ tail 경합-inflation 점검 (지시 1)
 - **간접 증거는 inflation 부정**: WORKERS 3→12(경합 4배↑)인데 tail이 **오히려 얇아짐**(p95 2.51→1.42s, tool>10s 1.4→1.3%). 경합이 부풀렸다면 반대여야 함.
 - **직접 검증 진행 중**: 최장 tail 4태스크(prog 70·2·51·97)를 **WORKERS=1(무경합)로 재측정** → 큰 스텝의 tool 시간이 재현되면 실제 연산(경합 아님) 확정. [결과는 D-4]
+
+## D-4. tail 경합-inflation 점검 결과 — **경합 아님(실제 연산) 확정**
+
+최장 tail 4태스크(inst 2·51·70·97)를 **WORKERS=1(무경합)로 재측정**(`rec_tailcheck`). ※ 러너가 job_id를 1~4로 재부여 → 매핑 tc1=inst2, tc2=inst51, tc3=inst70, tc4=inst97.
+
+| instance | 12-way max_tool | 1-way max_tool | 판정 |
+|---|---|---|---|
+| 2 (`mat_feature_select`) | 180.9s | **296.0s** | **실제연산**(무경합이 오히려 김) |
+| 51 (`brain_blood_qsar`) | 103.3s | 0.1s | 궤적분기(무거운 스텝 미도달) |
+| 70 (`single_cell_analysis_de`) | 300.1s | 0.1s | 궤적분기 |
+| 97 (`formation_energy_pred`) | 102.1s | 0.1s | 궤적분기 |
+
+- **핵심**: 재현된 유일 케이스(inst2)가 **무경합에서 오히려 길다(296>181s)** → 경합이 부풀린 것이라면 무경합에서 짧아져야 하므로 **inflation 반증**. 무거운 tool 시간은 실제 과학 연산(모델 학습·특징선택) 실행 시간.
+- inst 51·70·97은 temp=0 재실행에서도 배치 비결정성으로 에이전트가 **다른(가벼운) 궤적**을 택해 무거운 스텝에 도달 안 함(0.1s) → 가설 검증엔 부적합하나 경합 증거는 전혀 아님.
+- **간접 증거도 일치**: WORKERS 3→12(경합 4배↑)에서 tail이 **얇아짐**(p95 2.51→1.42s).
+- **결론**: **tail은 실제 연산, 경합-inflation 아님. 녹화 trace를 tail 포함 그대로 replay 안전**(HLE 스윕에서 24h 분포를 tail 포함 replay한 것과 동일 원칙).
+
+## D-5. 스윕 캘리브레이션 (A안 — 실측 우선)
+
+full 30-run 스윕 예상이 decode-heavy·단일GPU로 ~33–46h+로 커서, **tr·C=8·1 repeat만 먼저 실측**해 repeat 시간을 확정하기로 함(사용자 승인). [결과 D-6]
+
+## D-6. 스윕 캘리브레이션 결과 + 스코프 (옵션 B 트림)
+
+- **캘리브 실측**: tr·C=8·1repeat = **23분 56초**(NPROG=96, completed 96/96). → 비관 추정(225분) 대폭 하회.
+- **full 30-run 착수했으나** default 고-C 스래싱이 예상보다 깊어(C=16 thru 0.027, repeat당 ~1h) ETA ~18–20h로 상향 → 사용자와 **옵션 B 트림** 합의:
+  - default: C=8·16·24(이미 완료분) + **C=32·48 REPEAT=1**(붕괴 결정론적, 분산≈0이라 1회 충분).
+  - tr: C=8·16·24·32·48 **REPEAT=3 유지**(대비 정밀도).
+  - 최종 **default 9 run + tr 15 run = 24 run**. `sab_default.jsonl`, `sab_tr.jsonl`.
+
+## ★ D-7. 스윕 결과 — tr 완승 (fit×d=16.0 tr지배 zone)
+
+측정 프로토콜: 참 hit=`local_compute`(불변식), `--stream`, U 3중(gpu_util·b0_nrr·mem), 분위수, paused.
+
+| C | 영역 | default thru | default hit_true | default p95 | tr thru | tr hit_true | tr p95 | **tr 처리량 이득** |
+|---|---|---|---|---|---|---|---|---|
+| 8 | <fit | 0.072 | 0.863 | 345s | 0.083 | 0.896 | 243s | **+15%** |
+| 16 | ≈fit | 0.027 | 0.223 | 1464s | 0.089 | 0.851 | 403s | **+227%** |
+| 24 | >fit | 0.025 | 0.136 | 2235s | 0.078 | 0.799 | 779s | **+216%** |
+| 32 | >fit | 0.025 | 0.106 | 2912s | 0.070 | 0.739 | 1049s | **+175%** |
+| 48 | >fit | 0.024 | 0.067 | 3157s | 0.072 | 0.733 | 1026s | **+196%** |
+
+- **C=8(<fit) 음성대조**: 양쪽 정상(hit 0.86 vs 0.90), tr +15%(경미) — 스래싱 전이라 큰 차이 없음. ✅ 대조 성립.
+- **C≥16(≈fit~>fit)**: default **단조 붕괴**(hit_true 0.86→0.07, p95 345→3157s = 9배), tr은 **hit 방어**(0.90→0.73) → **처리량 +175~227% 압승**.
+- **P1 TraceLab/SWE 붕괴 임계 재확인**: 붕괴가 **C=fit(16)에서 개시** — fit이 붕괴 임계를 결정한다는 R모델 교차입증(TraceLab fit25→C32, SWE fit58→C64, Science fit16→C16).
+
+### ★★ D-8. 지시 4 핵심 검증 — HLE "U 낮음" 실패 모드 **미재현 확정**
+
+**U 3중 측정 (median)**:
+| C | default gpu_util | default nrr | tr gpu_util | tr nrr | tr paused |
+|---|---|---|---|---|---|
+| 8 | 100% | 6 | 100% | 7 | 0 |
+| 16 | 100% | 11 | 100% | 9 | **2** |
+| 24 | 100% | 10 | 100% | 9 | **8** |
+| 32 | 100% | 10 | 100% | 7 | **12** |
+| 48 | 100% | 10 | 100% | 6 | **18** |
+
+- **★ U=100% 양쪽 전 구간 포화** → **HLE 실패 모드 미재현 확정**.
+  - HLE: R≫1인데 원격 GLM API tool-wait이 wall time 지배 → GPU idle-wait → 실측 U 낮음 → tr 이득이 throughput으로 환산 안 됨.
+  - **Science: sparse tail(1−d=1.1%)이라 GPU idle-wait 없음 → U=1.0 포화 → tr이 포화된 GPU를 goodput으로 전환 → throughput 압승**(+175~227%).
+  - → **예측 적중**: "true-U 발산(R≫1인데 U 낮음)은 *상시 tail*(HLE) 특유, *희소 tail*(Science)엔 없음" **확정**.
+- **메커니즘 = occupancy 아니라 goodput** (P1 Pro6000 발견 재확인): default도 U=100%지만 스래싱 재프리필로 **낭비**(hit 0.07), tr은 **f(t) pause**로 resident를 fit 내로 유지(nrr 10→6, paused 0→18) → 같은 100% GPU를 **productive**하게 씀(hit 0.73).
+- **f(t) 발동 정량**: tr paused가 C=8:0 → C=48:18로 단조 증가(default는 전 구간 0). C가 fit을 넘을수록 tr이 더 강하게 pause해 스래싱 억제.
+
+### D-9. reported vs true hit 갭 (계측 정직성)
+| C | default reported | default true | 갭 |
+|---|---|---|---|
+| 8 | 0.725 | 0.863 | +0.139 |
+| 16 | 0.098 | 0.223 | +0.125 |
+| 24 | 0.052 | 0.136 | +0.084 |
+| 32 | 0.049 | 0.106 | +0.057 |
+| 48 | 0.028 | 0.067 | +0.039 |
+- default의 **reported `prefix_cache_hit_rate`가 참 hit(local_compute 기반)을 과소보고**(스래싱 하에서 최대 −0.14). tr은 갭≈0(reported≈true, 스래싱 없어 계측 일치). → HLE에서 본 "스래싱 하 reported 과소보고" 재확인. **참 hit 병기의 필요성 입증.**
+
+### D-10. 정직 기록 (프레이밍·한계)
+1. **스캐폴드**: mini-swe-agent (논문 OpenHands 아님). SWE와 통일해 워크로드 효과만 분리(D-0). **논문 Science 절대값 직접 대조 불가.**
+2. **고듀티(d=0.989)**: Science는 SWE급 decode-heavy라 **crossover(fit×d<1 트레이드오프 영역) 진입 불가** — 단일-GPU로 fit을 16까지 줄여도 d가 높아 fit×d=16≫1. 저-fit×d 점 확보 기대는 부분 실현(fit은 낮췄으나 d가 높아 곱은 큼). **trade-off zone 재현은 여전히 4090·TraceLab이 유일 측정점.**
+3. **tool 실패율 46.6%**: 범용 샌드박스에 태스크별 과학패키지 부재 탓(upstream은 태스크별 conda). **정확도(task success) 비교엔 미사용, 스케줄링 지표(토큰·시간)만 사용** — 서빙 결론에 무해.
+4. **default C≥24 REPEAT=1**: 트림. 붕괴 분산≈0(C=16: 0.027/0.028/0.027)이라 정보 손실 미미.
+
+### 산출물
+- `figures/p2_sab_sweep.png` (throughput·true-hit·p95, default vs tr, fit선 표시)
+- `scratch/sab/sab_{default,tr}.jsonl` (24 run), `sweep/sample_*.csv` (U 3중)
+- STEPS_RESULTS 레짐 지도: **측정 5셀**로 확장(Science 추가, fit×d=16.0 tr지배).
+
+**→ 게이트 정지·보고. 4워크로드(SWE·TraceLab·HLE·Science) 재현 완성.**

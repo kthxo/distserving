@@ -1,0 +1,20 @@
+# P2/Science isolated OpenHands config (yunuikang).
+# Does NOT modify examples/inference/OpenHands/config.toml (which pins GLM-4.6-FP8).
+# Points at the ThunderAgent proxy (:9000), which fronts Deployment A' (:8000, GPU1 Qwen3-32B).
+
+[llm.sab_qwen32b]
+model = "Qwen/Qwen3-32B"
+custom_llm_provider = "openai"
+base_url = "http://127.0.0.1:9000/v1"
+api_key = "dummy"
+temperature = 0.0
+native_tool_calling = false
+max_output_tokens = 4096
+num_retries = 3
+retry_min_wait = 5
+retry_max_wait = 30
+
+[agent]
+enable_browsing = false
+enable_jupyter = true
+enable_llm_editor = false

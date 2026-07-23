@@ -1,0 +1,172 @@
+# P2/Science: mini-swe-agent config for ScienceAgentBench (isolated, yunuikang).
+# Mirrors scripts/swebench_qwen32b_config_yunuikang.yaml (P1 SWE) so the agent scaffold
+# is IDENTICAL across the two workloads — only the task/instruction differs. That is the
+# point: it isolates the workload effect on the fit x d regime map.
+# NOTE: not the paper's OpenHands CodeAct scaffold (see P2 log).
+
+agent:
+  system_template: |
+    You are a helpful assistant that can interact multiple times with a computer shell to solve programming tasks.
+    Your response must contain exactly ONE bash code block with ONE command (or commands connected with && or ||).
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+    Format your response as shown in <format_example>.
+
+    <format_example>
+    THOUGHT: Your reasoning and analysis here
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    Failure to follow these rules will cause your response to be rejected.
+  instance_template: |
+    {{task}}
+
+    <instructions>
+    # Task Instructions
+
+    ## Overview
+    You are writing a NEW Python program from scratch to solve a scientific data-analysis
+    task. You interact with a computer by submitting ONE shell command at a time, seeing
+    its output, then submitting the next command.
+
+    ## Recommended Workflow
+    1. Inspect the dataset first (e.g. `ls`, `head`, or a short python one-liner) so your
+       program matches the actual file format.
+    2. Write the complete program to the requested path using a heredoc.
+    3. Run the program with `python`.
+    4. Read any traceback and fix the program. Repeat until it runs cleanly and writes its
+       output file.
+    5. Verify the output file exists and looks correct.
+
+    ## Important Boundaries
+    - The dataset is READ-ONLY at `/benchmark/datasets/`. Do not attempt to modify it.
+    - Write your program to the exact path requested in the request above.
+    - Save any program outputs under `/workspace/pred_results/`.
+    - Do NOT run the program in the background; run it in the foreground so you see errors.
+    - If a package is unavailable or incompatible, find an alternative implementation using
+      what is installed. Do NOT restart the environment.
+
+    ## Command Execution Rules
+    You are operating in an environment where
+    1. You write a single command
+    2. The system executes that command in a subshell
+    3. You see the result
+    4. You write your next command
+
+    Each response should include:
+    1. A **THOUGHT** section where you explain your reasoning and plan
+    2. A single bash code block with your command
+
+    **CRITICAL REQUIREMENTS:**
+    - Your response SHOULD include a THOUGHT section explaining your reasoning
+    - Your response MUST include EXACTLY ONE bash code block
+    - This bash block MUST contain EXACTLY ONE command (or a set connected with && or ||)
+    - If you include zero or multiple bash blocks, YOUR RESPONSE WILL FAIL
+    - Directory or environment variable changes are not persistent. Every action is
+      executed in a new subshell.
+    - However, you can prefix any action with `MY_ENV_VAR=MY_VALUE cd /path/to/dir && ...`
+
+    ## Useful Command Examples
+
+    ### Write the program (preferred way to create files):
+    ```bash
+    cat <<'EOF' > /workspace/pred_programs/my_program.py
+    import pandas as pd
+    df = pd.read_csv("/benchmark/datasets/example/train.csv")
+    print(df.head())
+    EOF
+    ```
+
+    ### Run it:
+    ```bash
+    cd /workspace && python pred_programs/my_program.py
+    ```
+
+    ### Inspect data:
+    ```bash
+    head -3 /benchmark/datasets/example/train.csv
+    ```
+
+    ### Edit with sed:
+    ```bash
+    sed -i 's/old_string/new_string/g' /workspace/pred_programs/my_program.py
+    ```
+
+    ## Submission
+    When the program runs successfully and has written its output, issue exactly:
+
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat /workspace/pred_programs/*.py
+    ```
+
+    This submits your work. You cannot continue working after submitting.
+    </instructions>
+  action_observation_template: |
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+    If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.
+
+    Please format your action in triple backticks as shown in <response_example>.
+
+    <response_example>
+    Here are some thoughts about why you want to perform the action.
+
+    ```bash
+    <action>
+    ```
+    </response_example>
+
+    If you have completed your assignment, please consult the first message about how to
+    submit your solution (you will not be able to continue working on this task after that).
+  step_limit: 40
+  cost_limit: 10.
+
+environment:
+  cwd: "/workspace"
+  # Science programs (model training, plotting) are slower than SWE test runs.
+  timeout: 300
+  pull_timeout: 600
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: 'off'
+    TQDM_DISABLE: '1'
+    MPLBACKEND: Agg
+  environment_class: docker
+  image: "docker.io/xingyaoww/openhands-eval-scienceagentbench"
+
+model:
+  model_class: vllm
+  model_name: "Qwen/Qwen3-32B"
+  base_url: "http://localhost:9000/v1"
+  api_key: "DUMMY"
+  model_kwargs:
+    drop_params: true
+    temperature: 0.0

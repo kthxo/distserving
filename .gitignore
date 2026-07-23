@@ -10,3 +10,4 @@ openhands_swebench/system_monitor.csv
 .claude/settings.local.json
 examples/inference/ToolOrchestra/evaluation/cache/
 slides/
+scratch/
