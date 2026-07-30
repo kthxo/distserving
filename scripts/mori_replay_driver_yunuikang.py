@@ -172,7 +172,16 @@ async def main_async(args) -> dict:
                 _worker(client, args, padder, gen, sem, results, trace, deadline, cyc))
             for _ in range(args.concurrency)
         ]
-        await asyncio.gather(*workers)
+        # HARD wall-clock stop: workers stop STARTING sessions at `deadline`, but a
+        # single in-flight session (Track M has minutes-long cumulative tool sleeps)
+        # would otherwise run far past it. Cancel stragglers at deadline+grace so the
+        # run is bounded; partial (cancelled) sessions are simply not counted.
+        try:
+            await asyncio.wait_for(asyncio.gather(*workers), timeout=args.duration_s + args.deadline_grace_s)
+        except asyncio.TimeoutError:
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
         wall = time.perf_counter() - wall0
 
         stop.set()
@@ -291,6 +300,8 @@ def main() -> None:
     ap.add_argument("--system", default="MORI", help="label: SMG|TA|TA+O|MORI")
     ap.add_argument("--concurrency", type=int, default=20)
     ap.add_argument("--duration-s", type=float, default=3600.0, help="fixed wall-clock window (paper: 1h)")
+    ap.add_argument("--deadline-grace-s", type=float, default=45.0,
+                    help="after duration, cancel in-flight sessions this many seconds later (hard stop)")
     ap.add_argument("--warmup-frac", type=float, default=0.2)
     ap.add_argument("--hicache-ratio", type=float, default=0.0, help="label only (0=off)")
     ap.add_argument("--metric-interval", type=float, default=15.0, help="sec between /metrics samples")
