@@ -354,7 +354,7 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | ~~OQ-E1~~ | **✅ 해소**: sglang 0.5.10이 sm_120에서 실구동(§A-2b). 툴체인 env만 필요 | 완료(본 턴) | — |
 | **OQ-E2** | HiRadixCache evict **통합 지점**(플래그는 §A-2b서 확정: `radix_eviction_policy`/`hicache_*`) + host 할당 정합 | M-SGL 후 소스 대조 | Phase 2 host-용량만 fallback |
 | ~~OQ-F~~ | **✅ 해소(M4-T)**: SGLang에 `PriorityStrategy=(node.priority,last_access)` 존재. 라우터가 OpenAI `priority`로 타입 주입→`Req.priority`→`node.priority`(insert 시 자동 스탬프). GPU-tier 엔진패치 불요. host 역순만 `evict_host` 전략스왑 | 완료 | — |
-| **OQ-F2** | `node.priority`가 monotonic `max()`(busy→idle 전이가 기존 노드에 반영 안 됨, 공유 prefix는 max) | 리뷰 결정 | per-request 정적 타이핑 수용 or 전파 override |
+| **OQ-F2** | 전이 시 재스탬프(host 보존). **판정(소스)**: promote→busy는 처리됨(resume 요청 priority=f(ι)+insert max). **demote→idle 즉시 재스탬프는 엔진 측 깔끔히 불가**(`cache_finished_req` 후 Req 해제·program→node 인덱스/priority-update API 없음). ι가 윈도우(k=5) 평균이라 지속 idle은 이미 high-ι→low-priority로 host 보존; 잔여=**빠른 busy→idle 전이 transient staleness**. shared-prefix max 수용 | **M-SMK 실측·게이트** | 무시 수준→정적 수용+명기 / 유의미→헤드라인 전 해결. **host 보존 깨진 채 헤드라인 금지** |
 | **OQ-I** | HiCache offload/reload 메트릭명(현 sglang_metrics 클라이언트에 없음) | STEP1 live `/metrics` | driver `--hicache-metrics` 확장점 |
 | **OQ-G** | human-wait wall-gap 복원 채택? | M1 prep 설계 | 미채택 → 한계 기록 |
 | **OQ-H** | Qwen3-8B HF 캐시 존재 여부 | STEP1 전 | 재다운로드(~16GB) |
@@ -384,8 +384,8 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | **M4-H** | ✅ **완료(본 턴)**: `mori_replay_driver`(base import + 고정1h·순환셔플·TTFT집계·SGLang메트릭·순환게이트) + `run_mori_eval`(시스템셀렉터+FATAL가드) + `_serve_sglang_8b_tp2_mori`+launcher. **reload_seconds 모델 제거 → 실 HiCache 매핑.** 원본 driver 무수정 | ✕ | ✅ dry-run 토큰매칭 within_1pct=1.0 + `tr`/state diff 0 |
 | **M4-T** | ✅ **완료(본 턴)**: `mori_hicache.install()` — 'priority'/'mori' 등록 + `evict_host` host-역순 전략스왑; 라우터 ι→`priority` 주입(busy=2/idle=0). OQ-F 해소(엔진패치 불요) | ✕ | ✅ `.venv-sglang` install 검증; 런타임은 M-SMK(GPU) |
 | **STEP1** | native 풀→`--max-total-tokens` 핀 · decode tok/s · 1h 표본 충분성 · HiCache offload 메트릭명(~15분) | ○ | 값 확정, 리뷰 |
-| **M-SMK** | **완전 MORI(a+b) 실 HiCache 스모크**: offload/reload 실동작 + typed eviction 활성 + `tr` 회귀(P4) | ○ | 정상 응답 + HiCache 카운터 + 장부↔host ±10% |
-| **M-SWP** | **헤드라인 스윕 1h×18셀**(SMG/TA/TA+O/MORI(a+b)) + 결정셀 repeat + ec/swebench/nohw | ○ | §D-6 P1~P4 (두 렌즈·ι층화 병기) |
+| **M-SMK** | **완전 MORI(a+b) 실 HiCache 스모크**: offload/reload 실동작 + typed eviction 활성 + `tr` 회귀(P4) + **OQ-F2 host-evict 실측**(EVICT=mori vs priority A/B: idle-host-KV 조기 evict율·host reload율) | ○ | 정상 응답 + HiCache 카운터 + 장부↔host ±10% + **OQ-F2 판정**(무시/유의미) |
+| **M-SWP** | **헤드라인 스윕 1h×18셀**(SMG/TA/TA+O/MORI(a+b)) + 결정셀 repeat + ec/swebench/nohw | ○ | §D-6 P1~P4 (두 렌즈·ι층화 병기). **전제: M-SMK에서 host 보존 무손상 확인**(OQ-F2) |
 | **M7**(선택) | 32B / multi-replica / k ablation / (a)-only 대조 | ○ | — |
 
 의존(재스코프): M0·M1·M-SGL·M3 **완료** → **M4-H ∥ M4-T (CPU, 리뷰)** → **STEP1**(GPU) → 리뷰 → **M-SMK**(GPU, 완전 MORI 검증) → **M-SWP**(GPU, 1h×18). 모델링 Phase 1(구 M4)·PCIe µbench **폐기**. (a)-only는 M4-T 막힐 때 폴백.

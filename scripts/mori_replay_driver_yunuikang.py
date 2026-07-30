@@ -180,31 +180,34 @@ async def main_async(args) -> dict:
         m_after = await _fetch_sglang(client, backends, extra)
 
     return summarize(args, backends, sessions, results, trace, wall, cyc, series,
-                     m_before=m_before, m_after=m_after, extra=extra)
+                     m_before=m_before, m_after=m_after, extra=extra, wall0=wall0)
 
 
 def summarize(args, backends, sessions, results, trace, wall, cyc, series,
-              m_before=None, m_after=None, extra=None) -> dict:
+              m_before=None, m_after=None, extra=None, wall0=0.0) -> dict:
     m_before = m_before or {}
     m_after = m_after or {}
     extra = extra or []
     ok = [r for r in results if r.get("ok")]
     fail = [r for r in results if not r.get("ok")]
 
-    # steady window: drop first/last warmup_frac of completed programs by finish order
-    steady = ok
-    if not args.dry_run and ok and args.warmup_frac > 0:
-        so = sorted(ok, key=lambda r: r.get("finished_at", 0))
-        k = int(len(so) * args.warmup_frac)
-        steady = so[k:len(so) - k] if len(so) - 2 * k >= 1 else so
-    steady_pids = {r["program_id"] for r in steady}
-
-    # steady wall = span of steady program finishes
-    if steady:
-        fin = [r["finished_at"] for r in steady]
-        steady_wall = (max(fin) - min(fin)) if len(fin) > 1 else wall
+    # Steady window = WALL-CLOCK: drop the first `warmup_frac` of the fixed
+    # duration, then count only programs that COMPLETED within the window.
+    # Programs still in flight at the deadline never entered `ok`, so
+    # boundary-incomplete work is excluded by construction. Throughput's
+    # denominator is the steady window length (steady_wall), not the raw run.
+    if not args.dry_run and ok:
+        steady_start = wall0 + args.warmup_frac * args.duration_s
+        steady = [r for r in ok if r.get("finished_at", 0) >= steady_start]
+        if steady:
+            steady_end = max(r["finished_at"] for r in steady)
+            steady_wall = max(1e-9, steady_end - steady_start)
+        else:
+            steady_wall = wall
     else:
+        steady = ok
         steady_wall = wall
+    steady_pids = {r["program_id"] for r in steady}
 
     steady_completion = sum(r["completion_tokens"] for r in steady)
     steady_turns = sum(r.get("turns_done", 0) for r in steady)
