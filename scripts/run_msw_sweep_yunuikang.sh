@@ -13,7 +13,10 @@ BP=8123; PP=9000; PIN="${PIN:-262144}"
 DUR="${DUR:-3600}"; GRACE="${GRACE:-60}"; WARM="${WARM:-0.2}"  # env-overridable for pre-flight
 OUT=/home/yunuikang/yunuikang_work/scratch/mori/msw; RES=$OUT/results_msw.jsonl
 HM="sglang:hicache_host_used_tokens,sglang:hicache_host_total_tokens,sglang:evicted_tokens_total,sglang:load_back_tokens_total,sglang:cached_tokens_total,sglang:prompt_tokens_total,sglang:generation_tokens_total"
-mkdir -p "$OUT"; : > "$RES"
+mkdir -p "$OUT"
+# Resumable: on a fresh run, truncate results; on RESUME=1 (re-launch after a
+# crash/disconnect), KEEP results and skip cells already present (run_cell checks).
+[ -z "${RESUME:-}" ] && : > "$RES"
 source "$VENV/bin/activate"
 
 BPID=""
@@ -35,6 +38,9 @@ boot_backend(){ # $1=EVICT $2=RATIO
   done; echo "[backend $1 r$2] TIMEOUT"; return 1; }
 
 run_cell(){ # $1=tag $2=system $3=router $4=extra $5=C
+  # Resume skip: a completed cell writes a summary line with its run_tag to $RES.
+  if grep -qa "\"run_tag\": \"$1\"" "$RES" 2>/dev/null; then
+    echo "[cell $1] SKIP (already in results) $(date +%T)"; return; fi
   echo "[cell $1] START $(date +%T)"
   kill_proxy
   nohup thunderagent --backend-type sglang --backends "http://localhost:$BP" --port $PP \
