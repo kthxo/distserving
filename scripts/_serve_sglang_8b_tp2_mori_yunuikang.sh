@@ -32,6 +32,9 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export CC="${CC:-/usr/bin/gcc-11}" CXX="${CXX:-/usr/bin/g++-11}"
 export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:--ccbin /usr/bin/g++-11}"
 export MAX_JOBS="${MAX_JOBS:-16}"
+# YaRN: 64k > Qwen3-8B derived 40960. STEP1-confirmed working (native pool 265,651 tok).
+export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
+YARN='{"rope_parameters":{"rope_type":"yarn","factor":1.6,"original_max_position_embeddings":40960,"rope_theta":1000000}}'
 
 HICACHE=()
 if [ "${RATIO%.*}" != "0" ] && [ "$RATIO" != "0" ]; then
@@ -42,9 +45,11 @@ echo "[serve-sglang-mori] MODEL=$MODEL GPUS=$GPUS TP=$TP PORT=$PORT MML=$MML MAX
 CUDA_VISIBLE_DEVICES="$GPUS" python "$REPO/scripts/serve_sglang_mori_launch_yunuikang.py" \
   --model-path "$MODEL" --tp "$TP" --host 0.0.0.0 --port "$PORT" \
   --context-length "$MML" --max-total-tokens "$MAXTOK" --mem-fraction-static "$MEMFRAC" \
+  --json-model-override-args "$YARN" --enable-metrics \
   --attention-backend triton --sampling-backend pytorch --disable-custom-all-reduce \
   --radix-eviction-policy "$EVICT" \
   "${HICACHE[@]}" 2>&1 | tee "$LOG"
 
-# WHEN IT WORKS: grep "max_total_num_tokens" "$LOG"   # native pool (STEP1: pin MAXTOK <= this)
-#                grep -iE "hierarchical|host memory" "$LOG"   # HiCache host pool allocated
+# STEP1 (2026-07-30): native max_total_num_tokens=265,651 (mem-frac 0.85) -> MAXTOK=262144 valid.
+# decode ~152 tok/s. HiCache host ~19.6 GB/rank at ratio 1. --enable-metrics needed for /metrics.
+# WHEN IT WORKS: grep "max_total_num_tokens" "$LOG" ; grep -iE "hierarchical|host memory" "$LOG"

@@ -55,7 +55,7 @@ HW_EXCLUDE_S = 12 * 3600    # human gaps >= 12h excluded (session boundary / lef
 LONG_THRESH = 2.0           # short/long boundary (s)
 TARGET_SHARE = 0.58         # paper long(>2s) time-share
 REASON_PREFILL = 8000.0     # T_reasoning proxy: uncached_input / 8000
-REASON_DECODE = 145.0       # T_reasoning proxy: output      / 145
+REASON_DECODE = 152.0       # T_reasoning proxy: output/decode_tok_s (STEP1 goguma6/SGLang; was nutella 145)
 PS = [50, 90, 99, 99.95]
 
 # paper Fig.3 target (tool-call durations incl human-input & subagent)

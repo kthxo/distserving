@@ -40,7 +40,7 @@ goguma6는 **RTX 5090 32GB×2 = TP2 합산 HBM 63.7 GiB**(nutella 191 GiB의 0.3
 | 드라이버/CUDA/arch | — | **580.82.07 / 13.0 / sm_120 Blackwell** | `nvidia-smi` |
 | **엔진** | vLLM 0.24.0 | **SGLang v0.5.10 + HiCache (신규 설치 필요, 현재 미설치)** · vLLM 0.24는 무시 | 사용자 결정 #3 |
 | **오프로딩 스택** | vLLM OffloadingConnector | **SGLang HiCache(계층 radix + host tier)** | 결정 #3 |
-| native C_total (8B) | 1,150,112 tok(158 GiB) | **≈270–310k tok(~38 GiB) ; STEP1 확정** | HBM 0.33× (§A-3). SGLang 기동 로그 `max_total_num_tokens`에서 |
+| native C_total (8B) | 1,150,112 tok(158 GiB) | **✅ 265,651 tok(STEP1 실측, mem-frac0.85) ; 핀 262,144 유효** | SGLang 기동 로그 `max_total_num_tokens` |
 | native fit(÷peak65.7k) | ≈17.5 — 압박 없음 | **≈4.2 — 압박 있음** | 작은 HBM |
 | **capping** | 필수(158→60G) | **불필요(native가 논문 레짐)** — 재현·I6용 36 GiB 핀만 | 결정 #2 |
 | C_gpu 설정 | cap 60G 강제 | **`--max-total-tokens 262144`(36 GiB) 핀 ≤ native** | cap-up 불가(작은 HBM) |
@@ -128,8 +128,8 @@ export MAX_JOBS=16
 native KV 풀 추정:
 ```
 TP2 usable = 63.68·0.92 ≈ 58.6 GiB − 가중치(8B bf16 ~15.3) − 오버헤드(~5) ≈ 38 GiB
-→ native C_total ≈ 38·2^30/147456 ≈ 277k tok  (범위 270–310k, STEP1 SGLang 기동 로그 max_total_num_tokens로 확정)
-native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐에 native 진입
+→ native C_total ≈ 38·2^30/147456 ≈ 277k tok (추정). **STEP1 실측 = 265,651 tok**(mem-frac 0.85) → 핀 262,144 ≤ native 확정.
+native fit = 265,651 / peak(ec128k median 65,678) ≈ 4.0  → 논문 압박 레짐에 native 진입
 ```
 ⇒ **capping으로 압박을 만들 필요 없음(결정 #2).** `--max-total-tokens`를 measured native보다 약간 아래 라운드값으로 핀:
 - **C_gpu = 262,144 tok = 36 GiB** (재현성·불변식 I6 정합용, 압박 생성 목적 아님).
@@ -347,16 +347,16 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 ### E-1. 오픈 퀘스천 (SGLang 갱신)
 | Q | 내용 | 해소 시점 | 못 풀면 |
 |---|------|-----------|---------|
-| **OQ-A** | native C_total(KV 풀) 정확값 | STEP1 SGLang 기동 로그 `max_total_num_tokens` | 추정 38G로 진행 |
-| **OQ-B** | SGLang/5090 decode tok/s | STEP1 | ι 프록시·표본 반영 |
-| **OQ-C** | L 최종값(peak 목표) | trace-prep G1(OQ-A 의존) | 잠정 L=64k |
-| **OQ-D** | 20분창 표본 충분? | STEP1/M4 | 창 연장 |
+| ~~OQ-A~~ | **✅ STEP1**: native `max_total_num_tokens=265,651`(mem-frac0.85). → `--max-total-tokens 262144` **유효**(≤native) 확정 | 완료 | — |
+| ~~OQ-B~~ | **✅ STEP1**: decode **151.8 tok/s**(nutella 145) → prep `REASON_DECODE 145→152`(ι-IQR 0.692, 게이트 무영향) | 완료 | — |
+| ~~OQ-C~~ | ✅ L=64k 확정(YaRN) | 완료 | — |
+| ~~OQ-D~~ | **✅ STEP1**: 1h·C=20 steady ≈ **2,426 완료 턴**(tool-dominated) → 집계 충분, 1h 유지·창 연장 불요 | 완료 | — |
 | ~~OQ-E1~~ | **✅ 해소**: sglang 0.5.10이 sm_120에서 실구동(§A-2b). 툴체인 env만 필요 | 완료(본 턴) | — |
 | **OQ-E2** | HiRadixCache evict **통합 지점**(플래그는 §A-2b서 확정: `radix_eviction_policy`/`hicache_*`) + host 할당 정합 | M-SGL 후 소스 대조 | Phase 2 host-용량만 fallback |
 | ~~OQ-F~~ | **✅ 해소(M4-T)**: SGLang에 `PriorityStrategy=(node.priority,last_access)` 존재. 라우터가 OpenAI `priority`로 타입 주입→`Req.priority`→`node.priority`(insert 시 자동 스탬프). GPU-tier 엔진패치 불요. host 역순만 `evict_host` 전략스왑 | 완료 | — |
 | **OQ-F2** | 전이 시 재스탬프(host 보존). **판정(소스)**: promote→busy는 처리됨(resume 요청 priority=f(ι)+insert max). **demote→idle 즉시 재스탬프는 엔진 측 깔끔히 불가**(`cache_finished_req` 후 Req 해제·program→node 인덱스/priority-update API 없음). ι가 윈도우(k=5) 평균이라 지속 idle은 이미 high-ι→low-priority로 host 보존; 잔여=**빠른 busy→idle 전이 transient staleness**. shared-prefix max 수용 | **M-SMK 실측·게이트** | 무시 수준→정적 수용+명기 / 유의미→헤드라인 전 해결. **host 보존 깨진 채 헤드라인 금지** |
-| **OQ-I** | HiCache offload/reload 메트릭명(현 sglang_metrics 클라이언트에 없음) | STEP1 live `/metrics` | driver `--hicache-metrics` 확장점 |
-| **OQ-J** | ★ **64k 서빙엔 YaRN 필요**: Qwen3-8B 파생 context=**40960**, `--context-length 65536`이면 SGLang 사망(STEP1 실측). L=64k 유지=YaRN 활성(`SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1`+rope_scaling factor≈1.6; vLLM 트랙은 YaRN 검증), 또는 L=40k로 재슬라이스 | STEP1 재기동 전 결정 | vLLM와 동일 YaRN 권장 |
+| **OQ-I** | HiCache offload/reload 메트릭명 | **STEP1: /metrics 비어있음**(serve `enable_metrics=False`) → serve에 **`--enable-metrics` 추가함**. **M-SMK 부하 시 이름 확정** | driver `--hicache-metrics` 확장점 |
+| ~~OQ-J~~ | **✅ 해소(STEP1 구동 확정)**: YaRN 64k = `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1` + `--json-model-override-args '{"rope_parameters":{"rope_type":"yarn","factor":1.6,"original_max_position_embeddings":40960,"rope_theta":1000000}}'`. serve 스크립트에 baked-in. 단일요청 정상 응답 | 완료 | — |
 | **OQ-G** | human-wait wall-gap 복원 채택? | M1 prep 설계 | 미채택 → 한계 기록 |
 | **OQ-H** | Qwen3-8B HF 캐시 존재 여부 | STEP1 전 | 재다운로드(~16GB) |
 
@@ -384,7 +384,7 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | **M3** | ✅ **Phase 1 구현 완료(본 턴)**: `mori_config/idleness/tier/router` + 기존 4파일 순수추가(+수십줄) + 테스트 2개. | ✕ | **G3 통과**: `router.py`·`backend/state.py`·`profile/state.py` **diff 0줄**, 순수모듈·배선·정책(demote ι-desc/promote ι-asc/CPU-full→Waiting fallback/release)·**I1** 테스트 PASS. 잔여: 실엔진 회귀(P4)는 M4/M-SGL서 |
 | **M4-H** | ✅ **완료(본 턴)**: `mori_replay_driver`(base import + 고정1h·순환셔플·TTFT집계·SGLang메트릭·순환게이트) + `run_mori_eval`(시스템셀렉터+FATAL가드) + `_serve_sglang_8b_tp2_mori`+launcher. **reload_seconds 모델 제거 → 실 HiCache 매핑.** 원본 driver 무수정 | ✕ | ✅ dry-run 토큰매칭 within_1pct=1.0 + `tr`/state diff 0 |
 | **M4-T** | ✅ **완료(본 턴)**: `mori_hicache.install()` — 'priority'/'mori' 등록 + `evict_host` host-역순 전략스왑; 라우터 ι→`priority` 주입(busy=2/idle=0). OQ-F 해소(엔진패치 불요) | ✕ | ✅ `.venv-sglang` install 검증; 런타임은 M-SMK(GPU) |
-| **STEP1** | native 풀→`--max-total-tokens` 핀 · decode tok/s · HiCache 메트릭명. **1차 시도(본 턴): 서버 사망**(OQ-J: context 40960<65536) → 측정 미획득. **YaRN 결정 후 재기동 필요**. 부수 성과: Track M 음수 버그 발견·수정 | ○ | 값 확정, 리뷰 |
+| **STEP1** | ✅ **완료(YaRN 3차)**: native 265,651→핀 262,144 유효 · decode 152 tok/s · YaRN config 확정 · C=20 1h≈2.4k턴(충분). 잔여: HiCache 메트릭명(OQ-I, `--enable-metrics` 추가함, M-SMK 확정). 부수: Track M 음수 버그 수정 | ○ | ✅ 값 확정 |
 | **M-SMK** | **완전 MORI(a+b) 실 HiCache 스모크**: offload/reload 실동작 + typed eviction 활성 + `tr` 회귀(P4) + **OQ-F2 host-evict 실측**(EVICT=mori vs priority A/B: idle-host-KV 조기 evict율·host reload율) | ○ | 정상 응답 + HiCache 카운터 + 장부↔host ±10% + **OQ-F2 판정**(무시/유의미) |
 | **M-SWP** | **헤드라인 스윕 1h×18셀**(SMG/TA/TA+O/MORI(a+b)) + 결정셀 repeat + ec/swebench/nohw | ○ | §D-6 P1~P4 (두 렌즈·ι층화 병기). **전제: M-SMK에서 host 보존 무손상 확인**(OQ-F2) |
 | **M7**(선택) | 32B / multi-replica / k ablation / (a)-only 대조 | ○ | — |
