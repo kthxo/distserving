@@ -236,15 +236,26 @@ def register_routes(app: FastAPI, ta_router: MultiBackendRouter, config: Optiona
 def _create_router() -> MultiBackendRouter:
     """Create router with current config."""
     config = get_config()
-    return MultiBackendRouter(
-        config.backends,
+    common = dict(
         profile_enabled=config.profile_enabled,
-        scheduling_enabled=(config.router_mode == "tr"),
+        scheduling_enabled=(config.router_mode in ("tr", "mori")),
         scheduler_interval=config.scheduler_interval,
         backend_type=config.backend_type,
         acting_token_weight=config.acting_token_weight,
         use_acting_token_decay=config.use_acting_token_decay,
     )
+    if config.router_mode == "mori":
+        # Import here so the tr/default paths never import MORI modules.
+        from .scheduler.mori_router import MoriRouter
+        from .scheduler.mori_config import MoriConfig
+        mori = MoriConfig(
+            k=config.mori_k,
+            cpu_capacity_ratio=config.mori_cpu_capacity_ratio,
+            reload_bw_bytes_per_s=config.mori_reload_bw_bytes_per_s,
+            min_dwell_ticks=config.mori_min_dwell_ticks,
+        )
+        return MoriRouter(config.backends, mori=mori, **common)
+    return MultiBackendRouter(config.backends, **common)
 
 
 router = _create_router()

@@ -45,3 +45,11 @@ class Program:
     waiting_event: Optional[asyncio.Event] = field(default=None, repr=False)  # Event to wait on when paused
     marked_for_pause: bool = False  # Mark REASONING program to pause when it becomes ACTING
     acting_since: Optional[float] = None  # time.time() when status changed to ACTING
+
+    # --- MORI fields (only touched by MoriRouter; defaults keep tr/default behavior identical) ---
+    idle_window: Optional[object] = None  # mori_idleness.IdlenessWindow (created lazily in mori mode)
+    tier: str = "gpu"  # "gpu" | "cpu" | "waiting" — maintained only in mori mode
+    reason_started_at: Optional[float] = None  # REASONING start (after any pause) for ι measurement
+    last_response_end: Optional[float] = None  # previous response end, for pure-acting-gap measurement
+    reload_ready_at: Optional[float] = None  # CPU->GPU reload deadline (Phase-1 cost model)
+    moved_tick: Optional[int] = None  # scheduler tick of last tier move (sticky/anti-thrash)

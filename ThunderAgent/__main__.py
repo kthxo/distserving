@@ -13,8 +13,16 @@ def main() -> int:
     parser.add_argument("--log-level", default="info", help="Log level")
     parser.add_argument("--backends", default="http://localhost:8000", 
                         help="Comma-separated list of vLLM backend URLs")
-    parser.add_argument("--router", default="tr", choices=["default", "tr"],
-                        help="Router mode: 'default' (pure proxy) or 'tr' (capacity scheduling)")
+    parser.add_argument("--router", default="tr", choices=["default", "tr", "mori"],
+                        help="Router mode: 'default' (pure proxy), 'tr' (capacity scheduling), or 'mori' (relative-idleness 3-tier)")
+    parser.add_argument("--mori-k", type=int, default=5,
+                        help="MORI idleness window size (default: 5)")
+    parser.add_argument("--mori-cpu-capacity-ratio", type=float, default=1.0,
+                        help="MORI CPU tier capacity = ratio x GPU KV pool (1.0 or 2.0)")
+    parser.add_argument("--mori-reload-bw", type=float, default=8.0e9,
+                        help="MORI Phase-1 CPU->GPU reload bandwidth (bytes/s)")
+    parser.add_argument("--mori-min-dwell-ticks", type=int, default=1,
+                        help="MORI sticky cooldown ticks after a tier move (default: 1)")
     parser.add_argument("--backend-type", default="vllm", choices=["vllm", "sglang", "skyrl"],
                         help="Backend type: 'vllm', 'sglang', or 'skyrl'")
     parser.add_argument("--profile", action="store_true", 
@@ -48,6 +56,10 @@ def main() -> int:
         scheduler_interval=args.scheduler_interval,
         acting_token_weight=args.acting_token_weight,
         use_acting_token_decay=args.use_acting_token_decay,
+        mori_k=args.mori_k,
+        mori_cpu_capacity_ratio=args.mori_cpu_capacity_ratio,
+        mori_reload_bw_bytes_per_s=args.mori_reload_bw,
+        mori_min_dwell_ticks=args.mori_min_dwell_ticks,
     )
     set_config(config)
     
