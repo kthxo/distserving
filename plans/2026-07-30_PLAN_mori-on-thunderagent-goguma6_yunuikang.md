@@ -13,6 +13,12 @@
    - **Phase 1(스케줄러-only)은 엔진 무관** → SGLang 설치·호환 검증과 **병행/선행 가능**.
 4. **§D 프로토콜**: run-to-completion → **고정 벽시계 창으로 승격(필수)**. duration deadline + 무한 순환 제너레이터 + 벽시계창 완료-턴 집계 + TTFT/`--stream`. 순환 제너레이터의 **corpus 다양성·사이클 셔플 검증**을 게이트에 추가(prefix cache 인위 warm 방지).
 5. 20분창 = STEP1 decode tok/s 실측 후 표본 충분성 확인 **조건부 OK**. 8B 고정 OK.
+6. **★ 재스코프(2026-07-30, 최종)**: **모델링 Phase 1 폐기 → 실 SGLang HiCache 위 완전 MORI(a+b) 직행.** 논문 최대 충실 재현이 목표.
+   - 4종 시스템 전부 **실 HiCache** 위에서 실행. `mori_tier`의 **reload_seconds 비용모델·PCIe µbench·reload_bw 캘리브레이션 폐기** → `mori_tier`를 실 HiCache offload/reload에 매핑(idleness·router 로직은 유지). 실 reload가 측정됨.
+   - **완전 MORI = (a) 스케줄러[구현됨] + (b) typed eviction[SGLang HiRadixCache, §4.3.2]**. 헤드라인 스윕은 (a+b) 단일 버전으로 SMG/TA/TA+O와 비교(스윕을 stage로 안 쪼갬). (a)-only는 (b) 배선이 막힐 때의 **중간검증·폴백**으로만 보관.
+   - **Duration = 1시간**(`--duration-s 3600`), 20분창 폐기. **셀 18개**: SMG(3)+TA(3)+TA+O(6=r×C)+MORI(6=r×C), 우선 셀당 1런 → 결정 셀(C=80 등)만 repeat. r(1×/2×)은 오프로딩 시스템(TA+O·MORI)에만.
+   - **하네스 임의 생성 금지 = 기존 `trace_replay_driver_yunuikang.py` 확장**(§D-1b 조사 결과). µbench 제외.
+   - GPU 단계 승인 유지: 하네스 확장 + (b) 제작·리뷰(CPU) → STEP1(~15분) → 리뷰 → 완전 MORI 스모크 → 헤드라인 스윕(1h×18). 각 GPU 잡 사전 승인.
 
 ---
 
@@ -145,6 +151,8 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 신규 `mori_idleness.py`(~120L)/`mori_tier.py`(~200L)/`mori_router.py`(~400L)/`mori_config.py`(~40L); 기존 순수추가 +34L(`config.py`+6/`__main__.py`+14/`app.py`+8/`program/state.py`+6); `router.py`·`backend/state.py` diff 0줄. ι 항상-on 링버퍼(진행 중 툴콜을 `now-acting_since`로 반영 — 재현 핵심), CPU tier 별도 모듈, `_pause_until_safe` lock 밖 → `mori_lock`으로 확장, `shared_tokens` dead-code 규약 통일, 불변식 I1~I5. 상세는 base §B 참조(변경 없음). **엔진 전환의 영향은 I6과 Phase 2뿐.**
 
 ### B-Phase. Phase 1 vs Phase 2 (SGLang)
+
+> ⚠ **재스코프(결정 #6)로 이 표의 "Phase 1=모델링(reload_seconds sleep)"은 폐기됨.** 실 SGLang HiCache 위 완전 MORI(a+b) 직행. `mori_router`의 `reload_ready_at`/`reload_seconds`·`MoriConfig.reload_bw`는 M4-H에서 제거하고 `mori_tier`를 실 HiCache offload/reload에 매핑한다. 아래 표는 이력으로만 남김. §B-Phase2(typed eviction)는 여전히 유효(= M4-T의 핵심).
 
 | | **Phase 1 — 스케줄러 전용 (엔진 무관, 先행)** | **Phase 2 — SGLang HiCache 실연동** |
 |---|---|---|
@@ -295,8 +303,31 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 
 보고 지표(논문 §6.2와 1:1): `output_throughput_tok_s`, `step_throughput_req_s`, `ttft_mean/p95`, + `prefix_cache_hit_rate`·`local_compute` 참 recompute·GPU util(`sample_gpu_resident_yunuikang.py --gpus 0,1`)·`/health` tier 카운트.
 
-### D-2. 스윕 축·셀 (base와 동일 + 매칭/human-wait 축)
-4종 × C{20,50,80} × r{1×,2×}(오프로딩 시스템만). Phase 2 주 trace **18셀**. **primary = Track M**(`tracelab_moriM_L64k_yunuikang`, 전 hard 게이트 PASS) **+ nohw ablation**(human-wait 기여 격리). **Track P(58%)는 실험 arm에서 제외**(스윕 안 함; §C-4b trilemma 증거로만). 대조 = `ec128k`(전이 8.6/long 96%) + `swebench`(≈30% 저-idle 음성대조). **idleness는 연속 스펙트럼**으로 커버: swebench(저) ↔ Track M/ec(고) + ι 3분위 층화 보고(논문 취지 정합). 엔진 재기동 최소화(HiCache OFF/1×/2× 바깥루프).
+### D-1b. ★ 기존 replay 하네스 조사 — 재사용성 (본 턴, 읽기 전용; 재발명 금지)
+
+**base 드라이버 `scripts/trace_replay_driver_yunuikang.py`(482줄, dataset-agnostic, tool-scale 없음)가 논문 §6.1 기계를 이미 ~80% 보유** → 이걸 확장한다(expC 변형은 `--tool-scale` 있어 §1-1대로 제외).
+
+| 논문 §6.1 요건 | 기존 위치 | 재사용 |
+|---|---|---|
+| 토큰 매칭(실 tokenizer로 prompt_tokens 일치) | `Padder` `:79-126` | 그대로 |
+| closed-loop, 응답 후 `sleep(tool_duration)` 툴버블 | `run_program` `:278-279` | 그대로(= 논문 프로토콜) |
+| 세션=프로그램, 컨텍스트 누적, `/programs/release` | `run_program` `:208-289` | 그대로 |
+| TTFT 캡처(`--stream`) | `_chat_once` `:177-200` (`ttft`) | 그대로 |
+| steady-state warmup 트리밍·throughput·prefix-hit | `summarize` `:376-429` | 그대로 |
+| closed-loop C(Semaphore) | `build_program_list`+`main_async` `:306-359` | 오케스트레이션만 교체 |
+
+**확장 필요(결핍 4곳만)**:
+1. **고정 1h + 순환+셔플**: `main_async`(`:325`)이 **run-to-completion**(전 프로그램 gather). → C개 영속 워커가 셔플·순환 corpus에서 세션을 뽑아 `run_program`을 반복 호출, `--duration-s` deadline까지. `run_program`은 **그대로 재사용**(워커가 슬롯 역할).
+2. **TTFT 집계**: `trace`에 `ttft_s`는 있으나 summary에 미집계 → steady 창의 ttft mean/p50/p95 추가(~10줄).
+3. **SGLang 메트릭**: `_parse_prefix_cache`(`:131`)가 **vLLM 이름**(`vllm:prefix_cache_*`). → `ThunderAgent/backend/sglang_metrics.py:62-90`의 `sglang:cache_hit_rate/token_usage/num_used_tokens/prompt_tokens_total/generation_tokens_total`로 교체. **HiCache offload/reload 카운터는 현 클라이언트에 없음** → STEP1에서 live `/metrics`로 이름 확인 후 추가(OQ).
+4. **순환 제너레이터 게이트**: 사이클마다 셔플·고유세션 커버리지·prefix-hit 비단조 로그(§D-1 게이트).
+
+**설계**: 신규 `mori_replay_driver_yunuikang.py`가 base에서 `Padder/_chat_once/run_program/load_trace/_stats`를 **import**하고 위 4개만 추가. **원본 무수정**(베이스라인 재현). eval 러너 `run_serving_eval_yunuikang.sh`(`/health` FATAL 가드·per-C 샘플러 보유)를 `run_mori_eval_yunuikang.sh`로 복제해 `--backend-type sglang`+HiCache 플래그+시스템셀렉터+`--gpus 0,1`로 교체.
+
+### D-2. 스윕 축·셀 (재스코프: 실 HiCache 18셀)
+**실 SGLang HiCache 위 18셀**(모델링 Phase 없음): **SMG(3=C) + TA(3=C) + TA+O(6=r×C) + MORI(6=r×C)**, C{20,50,80}, r{1×,2×}는 오프로딩 시스템(TA+O·MORI)만. **MORI 셀 = 완전 MORI(a+b)** 단일 버전. **우선 셀당 1런 → 결정 셀(C=80·r=2× 등)만 repeat 추가**(non-overlap 판정용). **Duration = 1h**(`--duration-s 3600`).
+- 시스템↔엔진 매핑(실 HiCache): SMG=`--router default`+HiCache OFF / TA=`--router tr`+HiCache OFF / TA+O=`--router tr`+`--enable-hierarchical-cache --hicache-ratio r` / MORI=`--router mori`+`--enable-hierarchical-cache --hicache-ratio r`+`--radix-eviction-policy mori`(typed).
+- **primary = Track M**(`tracelab_moriM_L64k_yunuikang`, 전 hard 게이트 PASS) **+ nohw ablation**. Track P(58%)는 실험 arm 제외. 대조 = `ec128k`·`swebench`(저-idle). **idleness 연속 스펙트럼**: swebench(≈30%)↔Track M/ec(≈97%) + ι 3분위 층화. 엔진 재기동 최소화(HiCache OFF/1×/2× 바깥루프).
 - **human-wait ablation 축(§C-3/§C-4)**: primary(주입, CAP_HARD=300s) vs ablation(미주입) **양쪽 병기**. CAP 민감도 {300,600}.
 - **ι 층화 보고(점 6)**: aggregate가 idle-heavy여도 **저-ι stratum(busy-heavy)은 논문 유사 regime** → 시스템 비교를 **stratum별로도** 분해 보고(저-ι에서 MORI 이득이 논문에 가장 근접해야 함).
 
@@ -327,7 +358,7 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | **OQ-H** | Qwen3-8B HF 캐시 존재 여부 | STEP1 전 | 재다운로드(~16GB) |
 
 ### E-2. 결정 (반영 완료)
-엔진 **SGLang v0.5.10+HiCache** / 모델 **8B 고정** / duration **20분×3(조건부)** / **capping 없음+36GiB 핀** / **L=64k(turn-window만)** / Phase2 패치 **monkey-patch(가능 시)**.
+엔진 **SGLang v0.5.10+HiCache** / 모델 **8B 고정** / **duration 1h×18셀(결정셀 repeat)** / **capping 없음+36GiB 핀** / **L=64k(turn-window만)** / **모델링 Phase 1 폐기 → 완전 MORI(a+b) 실 HiCache 직행** / typed eviction=`--radix-eviction-policy mori` 등록.
 
 ### E-3. Blackwell/goguma6 위험 (SGLang 갱신)
 | 위험 | 상태 | 완화 |
@@ -348,12 +379,14 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | **M1** | trace 가공(**L=64k turn-window + Fig.3 분포 매칭**). 조사·분포 측정 **본 턴 완료**(§C-3/§C-4), 가공 생성·스크립트화는 다음 승인 | ✕ | **G1**: §C-2 8항 + **매칭 게이트**(P50/P90/P99 최근접·gap 명기, long-share→58% 최근접, KS 최소) + hard(전이 median≥4·ι IQR≥0.35·peak≤64k) |
 | **M-SGL** | ✅ **설치+스모크 PASS(본 턴)**. 잔여: flashinfer 실런 컴파일 확인 + 소스 대조(OQ-E2/F) | ○ | **G-SGL: 스모크부 통과**(기동+요청+HiCache host 할당 확인). 잔여는 M5 착수 전 |
 | **M3** | ✅ **Phase 1 구현 완료(본 턴)**: `mori_config/idleness/tier/router` + 기존 4파일 순수추가(+수십줄) + 테스트 2개. | ✕ | **G3 통과**: `router.py`·`backend/state.py`·`profile/state.py` **diff 0줄**, 순수모듈·배선·정책(demote ι-desc/promote ι-asc/CPU-full→Waiting fallback/release)·**I1** 테스트 PASS. 잔여: 실엔진 회귀(P4)는 M4/M-SGL서 |
-| **M4** | PCIe 마이크로벤치 + Phase 1 스윕(TA vs MORI-sim 12셀×3) | ○ | G4: C=80에서 MORI-sim>TA |
-| **M5** | Phase 2: HiCache typed eviction + I6 (G-SGL 통과 후) | ○ | G5: 장부 vs host 점유 ±10% |
-| **M6** | Phase 2 본 스윕 18셀×3 + 대조 | ○ | G6: P1~P4 |
-| **M7**(선택) | 32B / multi-replica / k ablation | ○ | — |
+| **M4-H** | **하네스 확장(CPU)**: `mori_replay_driver`(base import + 고정1h·순환셔플·TTFT집계·SGLang메트릭) + `run_mori_eval`(SGLang+HiCache) + SGLang serve 스크립트. **`mori_router` reload_seconds 모델 제거 → `mori_tier`를 실 HiCache에 매핑.** 원본 driver 무수정 | ✕ | dry-run 토큰매칭 OK + `tr` 회귀 없음(§D-1b) |
+| **M4-T** | **typed eviction 제작(CPU, §4.3.2)**: `--radix-eviction-policy mori` 등록 + `Req.rid→program→radix 노드` busy/idle/inactive 스탬프. 막히면(OQ-F) (a)-only 폴백 | ✕ | 소스 대조·유닛; GPU: inactive→idle→busy / CPU 반전 / 동타입 LRU |
+| **STEP1** | native 풀→`--max-total-tokens` 핀 · decode tok/s · 1h 표본 충분성 · HiCache offload 메트릭명(~15분) | ○ | 값 확정, 리뷰 |
+| **M-SMK** | **완전 MORI(a+b) 실 HiCache 스모크**: offload/reload 실동작 + typed eviction 활성 + `tr` 회귀(P4) | ○ | 정상 응답 + HiCache 카운터 + 장부↔host ±10% |
+| **M-SWP** | **헤드라인 스윕 1h×18셀**(SMG/TA/TA+O/MORI(a+b)) + 결정셀 repeat + ec/swebench/nohw | ○ | §D-6 P1~P4 (두 렌즈·ι층화 병기) |
+| **M7**(선택) | 32B / multi-replica / k ablation / (a)-only 대조 | ○ | — |
 
-의존: M0→M1→(**G1**)→ M3 →(G3)→ M4. **M-SGL은 M1과 병렬**(GPU 승인 시). M5는 G-SGL∧G4 후.
+의존(재스코프): M0·M1·M-SGL·M3 **완료** → **M4-H ∥ M4-T (CPU, 리뷰)** → **STEP1**(GPU) → 리뷰 → **M-SMK**(GPU, 완전 MORI 검증) → **M-SWP**(GPU, 1h×18). 모델링 Phase 1(구 M4)·PCIe µbench **폐기**. (a)-only는 M4-T 막힐 때 폴백.
 
 ---
 
