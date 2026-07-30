@@ -273,11 +273,11 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 
 **★ 구조적 trilemma (핵심)**: **58% 매칭 ⟂ (전이≥4 ∧ ι-IQR≥0.35).** 두 극: (a) pool 그대로 → 전이 4·ι-IQR 0.69 ✅ 이나 long-share ~99% ❌; (b) 58% blend → long-share 58% ✅ 이나 전이 2·ι-IQR 붕괴 ❌. 근본 원인 §5-(12). → 단일 trace로 셋 동시 불가.
 
-**결정 = 2-track (사용자 승인) — 둘 다 생성·감사 완료(본 턴)**:
-- **Track P (paper-regime)** `tracelab_mori_L64k_yunuikang.jsonl` (582세션/9,290턴): **58% 정확 매칭(58.08%)·peak≤64k PASS**. 전이/ι-IQR 게이트 **면제**(목적 아님). "논문 Fig.3 regime 재현" 렌즈.
-- **Track M (MORI-mechanism)** `tracelab_moriM_L64k_yunuikang.jsonl` (3,514세션/275,591턴): pool 전체(58% blend 제거) + ι-tercile 인터리브. **전이 median 4.0·ι-IQR 0.696·peak≤64k 전부 PASS**, long-share 98.9%(idle-heavy, by design). MORI 상대-idleness 랭킹이 발동하는 렌즈. 각 트랙 nohw ablation 동반.
-- **병기 보고**: §D-2에서 시스템 비교를 **두 렌즈 모두**로. ec128k(전이 8.6/long 96%)는 계속 대조군.
-- 게이트 스펙: Track P=58%·peak hard; Track M=전이≥4·ι-IQR≥0.35·peak hard. trilemma는 §5-(15) 기록.
+**결정 = 58% 폐기, Track M을 primary로 확정 (사용자 최종)**:
+- **primary = Track M** `tracelab_moriM_L64k_yunuikang.jsonl` (3,514세션/275,591턴): pool 전체(58% blend 제거) + ι-tercile 인터리브. **전이 median 4.0·ι-IQR 0.694·peak≤64k 전부 PASS**, long-share 98.9%(idle-heavy, by design). L=64k 유지(pool이 이미 통과 → L 조정 불필요). **재현: `python scripts/prep_tracelab_mori_yunuikang.py --track M`**.
+  - **+ nohw ablation** = human-wait 미주입 동일 세션. **전이 median 2.0로 FAIL** → human-wait 주입이 전이를 2→4로 견인함이 드러남(human-wait의 기여를 정량화하는 진짜 ablation). primary는 반드시 hw-주입본.
+- **Track P(58%)는 실험 arm에서 제외**(스윕 안 함). `--track P`로 재현만 가능; §5/deck에 **trilemma 증거**로 보존: "58% 강제 시 ι-IQR 0.69→0.26·전이 4→2 붕괴 — 58%는 논문 에이전트(짧은 콜 1.1s)의 창발 속성이라 우리 에이전트(0.24s)에선 재현 불가."
+- 게이트 스펙(최종): **primary(Track M) hard = 전이≥4·ι-IQR≥0.35·peak≤64k**(전부 PASS). 58% 매칭은 목표에서 삭제. trilemma·분포 gap은 §5 기록.
 
 ---
 
@@ -296,7 +296,7 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 보고 지표(논문 §6.2와 1:1): `output_throughput_tok_s`, `step_throughput_req_s`, `ttft_mean/p95`, + `prefix_cache_hit_rate`·`local_compute` 참 recompute·GPU util(`sample_gpu_resident_yunuikang.py --gpus 0,1`)·`/health` tier 카운트.
 
 ### D-2. 스윕 축·셀 (base와 동일 + 매칭/human-wait 축)
-4종 × C{20,50,80} × r{1×,2×}(오프로딩 시스템만). Phase 2 주 trace **18셀**. **주 trace = 2-track(§C-4b)**: Track P(`tracelab_mori_L64k`, 58% 매칭) + Track M(ι 이질성, 재생성 예정) 병기; 대조=`ec128k`(전이 8.6/long 96%)(+ec40k/swebench 음성대조). 엔진 재기동 최소화(HiCache OFF/1×/2× 바깥루프).
+4종 × C{20,50,80} × r{1×,2×}(오프로딩 시스템만). Phase 2 주 trace **18셀**. **primary = Track M**(`tracelab_moriM_L64k_yunuikang`, 전 hard 게이트 PASS) **+ nohw ablation**(human-wait 기여 격리). **Track P(58%)는 실험 arm에서 제외**(스윕 안 함; §C-4b trilemma 증거로만). 대조 = `ec128k`(전이 8.6/long 96%) + `swebench`(≈30% 저-idle 음성대조). **idleness는 연속 스펙트럼**으로 커버: swebench(저) ↔ Track M/ec(고) + ι 3분위 층화 보고(논문 취지 정합). 엔진 재기동 최소화(HiCache OFF/1×/2× 바깥루프).
 - **human-wait ablation 축(§C-3/§C-4)**: primary(주입, CAP_HARD=300s) vs ablation(미주입) **양쪽 병기**. CAP 민감도 {300,600}.
 - **ι 층화 보고(점 6)**: aggregate가 idle-heavy여도 **저-ι stratum(busy-heavy)은 논문 유사 regime** → 시스템 비교를 **stratum별로도** 분해 보고(저-ι에서 MORI 이득이 논문에 가장 근접해야 함).
 
@@ -362,7 +362,7 @@ base §5의 8개 유효(단 **엔진 항목 반전**): 이제 **엔진이 논문
 - **(9)** native HBM이 논문 압박 레짐에 근접(fit≈4)해 인위 축소 최소 — 방법론적으로 더 정직. 대신 L=64k의 전이보존 영향을 G1에서 검증.
 - **(10)** ✅ SGLang sm_120 구동 확정(스모크 PASS, §A-2b). 단 goguma6는 SGLang JIT에 툴체인 env(CUDA_HOME=/usr/local/cuda-13.0, gcc-11) 고정 필요 — serve 스크립트에 반드시 박아야 함. Phase 2 남은 전제는 typed-eviction 소스 통합(OQ-E2/F).
 - **(11)** 서브에이전트는 session=program 1:1(독립 분리 불가). human-wait는 실데이터로 복원해 primary 채택(§C-3).
-- **(12) ★ 논문 Fig.3 분포 gap(정량, §C-4)**: TraceLab은 short 콜이 구조적으로 너무 짧아(P50 0.196s vs 논문 1.096s) busy-time이 빈약 → long-time-share가 primary 99.7%(논문 58%)로 **구조적 초과**. CAP·세션 blend로 최근접시키되 **정확히 못 맞출 수 있음**을 명기하고 잔여 gap을 결과에 병기(fabrication 금지). 저-ι stratum은 논문 유사 regime이라 stratum별 비교로 보완.
+- **(12) ★ 논문 Fig.3 분포 gap = 측정 한계로 명기(가공으로 안 메움)**: primary(Track M) long-time-share **98.9% vs 논문 58%**, 원인은 **short 콜 median 0.24s vs 논문 1.096s**(다른 에이전트 → busy-time 구조적 빈약). 58%는 논문 에이전트의 **창발 속성**이라 재현 불가로 판단, **58% 조준을 폐기**(Track P 제외). 대신 **idleness를 연속 스펙트럼으로 커버**: `swebench`(≈30%, 저-idle) ↔ `Track M`/`ec128k`(≈97–99%, 고-idle) + ι 3분위 층화 → "idleness는 스펙트럼"이라는 논문 §3.3 취지와 정합. gap 자체를 결과에 정량 병기, fabrication 없음.
 - **(13) primary는 구성된(constructed) subset**: 논문 매칭용 세션 blend로 만든 것이라 자연 도착분포가 아님 — blend 비율·원본 분포·소스 세션 분포를 병기(§C-4-(4)).
 - **(14) TP2 no-P2P/SYS 인터커넥트**: GPU0↔GPU1이 NVLink 없이 cross-NUMA(SYS)라 P2P peer access 미지원 → `--disable-custom-all-reduce`로 NCCL fallback. TP all-reduce·PCIe 오프로딩 대역이 느려 **절대 throughput에 하향 영향**. 단 4종 시스템 모두 동일 인터커넥트라 **상대 비교는 보존**(MORI vs TA+O 결론에 영향 없음). 절대 수치를 논문과 직접 비교하지 않는다.
 - **(15) ★ 데이터 trilemma(§C-4b, 감사로 확정)**: TraceLab에서 (논문 58% regime) + (전이 median≥4) + (ι-IQR≥0.35)는 **동시 불가**. 그래서 primary를 **2-track**(Track P=58% 매칭, Track M=ι 이질성)으로 분리해 병기한다. 어느 단일 trace도 세 조건을 다 만족하지 못한다는 것 자체가 결과 해석의 전제 — MORI 이득은 두 렌즈에서 각각 보고한다.
