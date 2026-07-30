@@ -282,7 +282,7 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 **★ 구조적 trilemma (핵심)**: **58% 매칭 ⟂ (전이≥4 ∧ ι-IQR≥0.35).** 두 극: (a) pool 그대로 → 전이 4·ι-IQR 0.69 ✅ 이나 long-share ~99% ❌; (b) 58% blend → long-share 58% ✅ 이나 전이 2·ι-IQR 붕괴 ❌. 근본 원인 §5-(12). → 단일 trace로 셋 동시 불가.
 
 **결정 = 58% 폐기, Track M을 primary로 확정 (사용자 최종)**:
-- **primary = Track M** `tracelab_moriM_L64k_yunuikang.jsonl` (3,514세션/275,591턴): pool 전체(58% blend 제거) + ι-tercile 인터리브. **전이 median 4.0·ι-IQR 0.694·peak≤64k 전부 PASS**, long-share 98.9%(idle-heavy, by design). L=64k 유지(pool이 이미 통과 → L 조정 불필요). **재현: `python scripts/prep_tracelab_mori_yunuikang.py --track M`**.
+- **primary = Track M** `tracelab_moriM_L64k_yunuikang.jsonl` (3,514세션/**117,257턴**; rebase 버그 수정판, 음수 0): pool 전체(58% blend 제거) + ι-tercile 인터리브. **전이 median 4.0·ι-IQR 0.695·peak≤64k 전부 PASS**, long-share 98.8%(idle-heavy, by design). input median 32,376·max 65,536, output median 172. L=64k 유지(pool이 이미 통과 → L 조정 불필요). **재현: `python scripts/prep_tracelab_mori_yunuikang.py --track M`**.
   - **+ nohw ablation** = human-wait 미주입 동일 세션. **전이 median 2.0로 FAIL** → human-wait 주입이 전이를 2→4로 견인함이 드러남(human-wait의 기여를 정량화하는 진짜 ablation). primary는 반드시 hw-주입본.
 - **Track P(58%)는 실험 arm에서 제외**(스윕 안 함). `--track P`로 재현만 가능; §5/deck에 **trilemma 증거**로 보존: "58% 강제 시 ι-IQR 0.69→0.26·전이 4→2 붕괴 — 58%는 논문 에이전트(짧은 콜 1.1s)의 창발 속성이라 우리 에이전트(0.24s)에선 재현 불가."
 - 게이트 스펙(최종): **primary(Track M) hard = 전이≥4·ι-IQR≥0.35·peak≤64k**(전부 PASS). 58% 매칭은 목표에서 삭제. trilemma·분포 gap은 §5 기록.

@@ -73,13 +73,13 @@
 | 항목 | 값 | 출처 | 상태 |
 |---|---|---|---|
 | **primary = Track M** | `tracelab_moriM_L64k_yunuikang.jsonl` | §C-4b·§D-2 | SET |
-| ─ 규모 | 3,514 세션 / 275,591 턴 | 실측(`wc -l`) | SET |
+| ─ 규모 | 3,514 세션 / 117,257 턴 (rebase 버그 수정판; 이전 275,591은 음수 46% 포함) | 실측(`wc -l`) | SET |
 | ─ long-time-share | 98.9% (by design) | prep 실행·§C-4b | SET |
 | ─ 전이 median | **4.0** (hard≥4 PASS) | prep 실행·§C-4b | SET |
 | ─ ι-IQR(per-session) | **0.694** (hard≥0.35 PASS) | prep 실행·§C-4b | SET(프록시 의존, advisory) |
 | ─ peak | 65,536 (≤64k PASS) | prep 실행 | SET |
 | ─ 재현 | `python scripts/prep_tracelab_mori_yunuikang.py --track M` | `prep_...:565+` | SET |
-| ablation = nohw | `tracelab_moriM_L64k_nohw_yunuikang.jsonl` 275,591턴, long 96.85%, **전이 2.0(FAIL)** | prep 실행 | SET (human-wait 기여 입증) |
+| ablation = nohw | `tracelab_moriM_L64k_nohw_yunuikang.jsonl` 117,257턴, long 96.8%, **전이 2.0(FAIL)** | prep 실행 | SET (human-wait 기여 입증) |
 | 대조 저-idle | `swebench_trace.jsonl` 64세션/1,388턴, long 29.9% | §C-1 meta | SET |
 | 대조 고-idle | `tracelab_earlycutoff_128k` 4,142/189,431, long 96.3%, peak median 65,678 | §C-1 meta | SET |
 | CAP_HARD | 300.0 s (모든 duration) | `prep_...:53`·§C-4 | SET (600 민감도 실행 여부 미결정) |
