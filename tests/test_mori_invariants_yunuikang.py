@@ -43,7 +43,7 @@ def _tiers(r):
 
 def _router(gpu_cap, cpu_cap, ratio=2.0):
     r = MoriRouter(["u"], backend_type="sglang",
-                   mori=MoriConfig(cpu_capacity_ratio=ratio, reload_bw_bytes_per_s=1e18, min_dwell_ticks=0))
+                   mori=MoriConfig(cpu_capacity_ratio=ratio, min_dwell_ticks=0))
     r.backends["u"].metrics_client = _FakeMetrics(gpu_cap)
     r.cpu_tiers["u"].capacity_tokens = cpu_cap
     return r
@@ -66,8 +66,7 @@ def test_demote_iota_desc_then_promote_iota_asc():
         await r._scheduled_check()
         gpu, cpu, wait = _tiers(r)
         assert gpu == {"A", "B", "C"} and cpu == set()
-        assert r.programs["A"].reload_ready_at is not None    # reload cost stamped
-        assert r.programs["A"].waiting_event is None          # promotion unblocked
+        assert r.programs["A"].waiting_event is None          # promotion unblocked (real HiCache pays reload)
     asyncio.run(run())
 
 

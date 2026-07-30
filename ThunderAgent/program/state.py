@@ -51,5 +51,4 @@ class Program:
     tier: str = "gpu"  # "gpu" | "cpu" | "waiting" — maintained only in mori mode
     reason_started_at: Optional[float] = None  # REASONING start (after any pause) for ι measurement
     last_response_end: Optional[float] = None  # previous response end, for pure-acting-gap measurement
-    reload_ready_at: Optional[float] = None  # CPU->GPU reload deadline (Phase-1 cost model)
     moved_tick: Optional[int] = None  # scheduler tick of last tier move (sticky/anti-thrash)

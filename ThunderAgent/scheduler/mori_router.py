@@ -74,18 +74,28 @@ class MoriRouter(MultiBackendRouter):
 
         rv = await super().update_program_before_request(program_id, state, payload)
 
-        # Pay the CPU->GPU reload cost if this request was just promoted from the
-        # CPU tier (Phase-1 cost model). Reasoning starts only after KV is ready,
-        # so the pause is naturally excluded from ι.
-        ready_at = state.reload_ready_at
-        if ready_at is not None:
-            delay = ready_at - time.time()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            state.reload_ready_at = None
+        # Typed-eviction stamp (real HiCache): encode the program's relative
+        # idleness as the OpenAI `priority` field. SGLang propagates it onto the
+        # radix nodes this request creates (Req.priority -> node.priority), and
+        # the `priority` eviction policy sorts by (node.priority, last_access) —
+        # so busy (low ι, high rank) KV is kept on GPU and idle (high ι, low rank)
+        # KV is evicted first. Baselines (tr/default) never call this, so they
+        # keep SGLang's native LRU. No engine patch needed for the GPU tier.
+        payload["priority"] = self._type_rank(state, time.time())
 
         state.reason_started_at = time.time()
         return rv
+
+    def _type_rank(self, state: Program, now: float) -> int:
+        """MORI type -> priority rank (higher = keep on GPU longer).
+        busy (low ι) = 2, mixed = 1, idle (high ι) = 0. GPU eviction removes the
+        lowest rank first (inactive/idle -> ... -> busy)."""
+        iota = self._iota(state, now)
+        if iota < 0.33:
+            return 2
+        if iota < 0.66:
+            return 1
+        return 0
 
     def update_program_after_request(
         self, program_id: str, state: Program, total_tokens: int, prompt_tokens: int = 0
@@ -163,7 +173,8 @@ class MoriRouter(MultiBackendRouter):
         state.state = ProgramState.ACTIVE
         state.tier = "gpu"
         state.moved_tick = self._tick
-        state.reload_ready_at = now + self.mori.reload_seconds(state.total_tokens)
+        # Real HiCache pays the CPU->GPU reload (host->device KV copy) itself when
+        # the next request re-prefills from the host pool — no modeled delay here.
         if state.waiting_event is not None:
             state.waiting_event.set()
             state.waiting_event = None

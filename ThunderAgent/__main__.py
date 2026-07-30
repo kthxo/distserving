@@ -19,8 +19,6 @@ def main() -> int:
                         help="MORI idleness window size (default: 5)")
     parser.add_argument("--mori-cpu-capacity-ratio", type=float, default=1.0,
                         help="MORI CPU tier capacity = ratio x GPU KV pool (1.0 or 2.0)")
-    parser.add_argument("--mori-reload-bw", type=float, default=8.0e9,
-                        help="MORI Phase-1 CPU->GPU reload bandwidth (bytes/s)")
     parser.add_argument("--mori-min-dwell-ticks", type=int, default=1,
                         help="MORI sticky cooldown ticks after a tier move (default: 1)")
     parser.add_argument("--backend-type", default="vllm", choices=["vllm", "sglang", "skyrl"],
@@ -58,7 +56,6 @@ def main() -> int:
         use_acting_token_decay=args.use_acting_token_decay,
         mori_k=args.mori_k,
         mori_cpu_capacity_ratio=args.mori_cpu_capacity_ratio,
-        mori_reload_bw_bytes_per_s=args.mori_reload_bw,
         mori_min_dwell_ticks=args.mori_min_dwell_ticks,
     )
     set_config(config)

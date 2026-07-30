@@ -251,7 +251,6 @@ def _create_router() -> MultiBackendRouter:
         mori = MoriConfig(
             k=config.mori_k,
             cpu_capacity_ratio=config.mori_cpu_capacity_ratio,
-            reload_bw_bytes_per_s=config.mori_reload_bw_bytes_per_s,
             min_dwell_ticks=config.mori_min_dwell_ticks,
         )
         return MoriRouter(config.backends, mori=mori, **common)

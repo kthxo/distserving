@@ -44,10 +44,11 @@ def test_cputier_capacity_convention():
     assert t.count() == 0
 
 
-def test_reload_cost_model():
-    c = MoriConfig(reload_bw_bytes_per_s=8e9, bytes_per_token=147456)
-    assert c.reload_seconds(0) == 0.0
-    assert abs(c.reload_seconds(262144) - 262144 * 147456 / 8e9) < 1e-9
+def test_mori_config_fields():
+    # Re-scope: reload cost model removed (CPU tier = real HiCache host pool).
+    c = MoriConfig(k=5, cpu_capacity_ratio=2.0, min_dwell_ticks=1)
+    assert c.k == 5 and c.cpu_capacity_ratio == 2.0 and c.default_iota == 0.5
+    assert not hasattr(c, "reload_seconds")
 
 
 if __name__ == "__main__":

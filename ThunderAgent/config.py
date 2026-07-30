@@ -32,7 +32,6 @@ class Config:
     # MORI configuration (only used when router_mode == "mori")
     mori_k: int = 5  # idleness window size
     mori_cpu_capacity_ratio: float = 1.0  # CPU tier capacity = ratio x GPU KV pool (1x/2x)
-    mori_reload_bw_bytes_per_s: float = 8.0e9  # Phase-1 CPU->GPU reload cost model bandwidth
     mori_min_dwell_ticks: int = 1  # sticky cooldown (anti-thrash)
 
 
