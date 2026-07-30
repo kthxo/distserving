@@ -353,7 +353,9 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | **OQ-D** | 20분창 표본 충분? | STEP1/M4 | 창 연장 |
 | ~~OQ-E1~~ | **✅ 해소**: sglang 0.5.10이 sm_120에서 실구동(§A-2b). 툴체인 env만 필요 | 완료(본 턴) | — |
 | **OQ-E2** | HiRadixCache evict **통합 지점**(플래그는 §A-2b서 확정: `radix_eviction_policy`/`hicache_*`) + host 할당 정합 | M-SGL 후 소스 대조 | Phase 2 host-용량만 fallback |
-| **OQ-F** | rid→program→KV 노드 스탬프 경로(Q4, SGLang) | M-SGL 후 조사 | typed eviction 없는 fallback |
+| ~~OQ-F~~ | **✅ 해소(M4-T)**: SGLang에 `PriorityStrategy=(node.priority,last_access)` 존재. 라우터가 OpenAI `priority`로 타입 주입→`Req.priority`→`node.priority`(insert 시 자동 스탬프). GPU-tier 엔진패치 불요. host 역순만 `evict_host` 전략스왑 | 완료 | — |
+| **OQ-F2** | `node.priority`가 monotonic `max()`(busy→idle 전이가 기존 노드에 반영 안 됨, 공유 prefix는 max) | 리뷰 결정 | per-request 정적 타이핑 수용 or 전파 override |
+| **OQ-I** | HiCache offload/reload 메트릭명(현 sglang_metrics 클라이언트에 없음) | STEP1 live `/metrics` | driver `--hicache-metrics` 확장점 |
 | **OQ-G** | human-wait wall-gap 복원 채택? | M1 prep 설계 | 미채택 → 한계 기록 |
 | **OQ-H** | Qwen3-8B HF 캐시 존재 여부 | STEP1 전 | 재다운로드(~16GB) |
 
@@ -379,8 +381,8 @@ GPU 2개 모두 단일 TP2 replica에 소진 → 예비 없음, 직렬 스윕. �
 | **M1** | trace 가공(**L=64k turn-window + Fig.3 분포 매칭**). 조사·분포 측정 **본 턴 완료**(§C-3/§C-4), 가공 생성·스크립트화는 다음 승인 | ✕ | **G1**: §C-2 8항 + **매칭 게이트**(P50/P90/P99 최근접·gap 명기, long-share→58% 최근접, KS 최소) + hard(전이 median≥4·ι IQR≥0.35·peak≤64k) |
 | **M-SGL** | ✅ **설치+스모크 PASS(본 턴)**. 잔여: flashinfer 실런 컴파일 확인 + 소스 대조(OQ-E2/F) | ○ | **G-SGL: 스모크부 통과**(기동+요청+HiCache host 할당 확인). 잔여는 M5 착수 전 |
 | **M3** | ✅ **Phase 1 구현 완료(본 턴)**: `mori_config/idleness/tier/router` + 기존 4파일 순수추가(+수십줄) + 테스트 2개. | ✕ | **G3 통과**: `router.py`·`backend/state.py`·`profile/state.py` **diff 0줄**, 순수모듈·배선·정책(demote ι-desc/promote ι-asc/CPU-full→Waiting fallback/release)·**I1** 테스트 PASS. 잔여: 실엔진 회귀(P4)는 M4/M-SGL서 |
-| **M4-H** | **하네스 확장(CPU)**: `mori_replay_driver`(base import + 고정1h·순환셔플·TTFT집계·SGLang메트릭) + `run_mori_eval`(SGLang+HiCache) + SGLang serve 스크립트. **`mori_router` reload_seconds 모델 제거 → `mori_tier`를 실 HiCache에 매핑.** 원본 driver 무수정 | ✕ | dry-run 토큰매칭 OK + `tr` 회귀 없음(§D-1b) |
-| **M4-T** | **typed eviction 제작(CPU, §4.3.2)**: `--radix-eviction-policy mori` 등록 + `Req.rid→program→radix 노드` busy/idle/inactive 스탬프. 막히면(OQ-F) (a)-only 폴백 | ✕ | 소스 대조·유닛; GPU: inactive→idle→busy / CPU 반전 / 동타입 LRU |
+| **M4-H** | ✅ **완료(본 턴)**: `mori_replay_driver`(base import + 고정1h·순환셔플·TTFT집계·SGLang메트릭·순환게이트) + `run_mori_eval`(시스템셀렉터+FATAL가드) + `_serve_sglang_8b_tp2_mori`+launcher. **reload_seconds 모델 제거 → 실 HiCache 매핑.** 원본 driver 무수정 | ✕ | ✅ dry-run 토큰매칭 within_1pct=1.0 + `tr`/state diff 0 |
+| **M4-T** | ✅ **완료(본 턴)**: `mori_hicache.install()` — 'priority'/'mori' 등록 + `evict_host` host-역순 전략스왑; 라우터 ι→`priority` 주입(busy=2/idle=0). OQ-F 해소(엔진패치 불요) | ✕ | ✅ `.venv-sglang` install 검증; 런타임은 M-SMK(GPU) |
 | **STEP1** | native 풀→`--max-total-tokens` 핀 · decode tok/s · 1h 표본 충분성 · HiCache offload 메트릭명(~15분) | ○ | 값 확정, 리뷰 |
 | **M-SMK** | **완전 MORI(a+b) 실 HiCache 스모크**: offload/reload 실동작 + typed eviction 활성 + `tr` 회귀(P4) | ○ | 정상 응답 + HiCache 카운터 + 장부↔host ±10% |
 | **M-SWP** | **헤드라인 스윕 1h×18셀**(SMG/TA/TA+O/MORI(a+b)) + 결정셀 repeat + ec/swebench/nohw | ○ | §D-6 P1~P4 (두 렌즈·ι층화 병기) |
