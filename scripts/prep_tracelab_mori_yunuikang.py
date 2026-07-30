@@ -162,21 +162,32 @@ def best_window(rounds):
         return None
     budget = L - SEED
     itot = [r["itot"] for r in rounds]
+    # Longest window whose context SPAN (max - min) <= budget. Using max-min (not
+    # max - start) is REQUIRED: some sessions are non-monotonic (context resets),
+    # so anchoring on the start value produced negative rebased tokens. Two-pointer
+    # with monotonic deques -> O(n).
+    from collections import deque
+    maxd: deque = deque()
+    mind: deque = deque()
+    left = 0
     best = (0, 0)
     best_len = 1
-    for i in range(n):
-        if n - i <= best_len:                   # prune: can't beat current best
-            break
-        run_max = itot[i]
-        thr = itot[i] + budget
-        j = i
-        while j < n and (run_max := max(run_max, itot[j])) <= thr:
-            j += 1
-        # window is [i, j-1]
-        wl = (j - 1) - i + 1
-        if wl > best_len:
-            best_len = wl
-            best = (i, j - 1)
+    for right in range(n):
+        while maxd and itot[maxd[-1]] <= itot[right]:
+            maxd.pop()
+        maxd.append(right)
+        while mind and itot[mind[-1]] >= itot[right]:
+            mind.pop()
+        mind.append(right)
+        while itot[maxd[0]] - itot[mind[0]] > budget:
+            left += 1
+            if maxd[0] < left:
+                maxd.popleft()
+            if mind[0] < left:
+                mind.popleft()
+        if right - left + 1 > best_len:
+            best_len = right - left + 1
+            best = (left, right)
     return best
 
 
@@ -191,7 +202,9 @@ def build_session(sid, rounds):
     if win is None:
         return None
     i, j = win
-    offset = rounds[i]["itot"] - SEED
+    # Rebase against the window MINIMUM (not the start) so rebased context is
+    # always >= SEED even when the session's context is non-monotonic.
+    offset = min(rounds[k]["itot"] for k in range(i, j + 1)) - SEED
 
     # human-wait per position (uses the previous KEPT round's last_ts)
     def hw_at(pos):
