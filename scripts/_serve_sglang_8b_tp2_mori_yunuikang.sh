@@ -41,8 +41,14 @@ if [ "${RATIO%.*}" != "0" ] && [ "$RATIO" != "0" ]; then
   HICACHE=(--enable-hierarchical-cache --hicache-ratio "$RATIO")
 fi
 
+# MORI typed-eviction patch is applied via scripts/sitecustomize.py in EVERY
+# process (incl. SGLang's spawned scheduler subprocesses, where the radix cache
+# is built) — a parent-only monkey-patch does NOT reach spawned schedulers.
+export PYTHONPATH="$REPO/scripts:${PYTHONPATH:-}"
+export SGLANG_MORI_PATCH=1
+
 echo "[serve-sglang-mori] MODEL=$MODEL GPUS=$GPUS TP=$TP PORT=$PORT MML=$MML MAXTOK=$MAXTOK MEMFRAC=$MEMFRAC RATIO=$RATIO EVICT=$EVICT log=$LOG"
-CUDA_VISIBLE_DEVICES="$GPUS" python "$REPO/scripts/serve_sglang_mori_launch_yunuikang.py" \
+CUDA_VISIBLE_DEVICES="$GPUS" python -m sglang.launch_server \
   --model-path "$MODEL" --tp "$TP" --host 0.0.0.0 --port "$PORT" \
   --context-length "$MML" --max-total-tokens "$MAXTOK" --mem-fraction-static "$MEMFRAC" \
   --json-model-override-args "$YARN" --enable-metrics \

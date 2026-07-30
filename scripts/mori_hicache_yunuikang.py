@@ -27,9 +27,23 @@ Baselines (SMG/TA/TA+O with `--radix-eviction-policy lru`) are unaffected: the
 """
 
 
+_INSTALLED = False
+
+
 def install() -> None:
+    # Idempotent: sitecustomize may invoke this in the main process AND every
+    # spawned scheduler subprocess; re-invocation must not double-register or
+    # double-wrap.
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    _INSTALLED = True
+
     from sglang.srt import server_args as SA
-    SA.add_radix_eviction_policy_choices(["priority", "mori"])
+    if "priority" not in SA.RADIX_EVICTION_POLICY_CHOICES:
+        SA.add_radix_eviction_policy_choices(["priority"])
+    if "mori" not in SA.RADIX_EVICTION_POLICY_CHOICES:
+        SA.add_radix_eviction_policy_choices(["mori"])
 
     from sglang.srt.mem_cache import radix_cache as RC
     from sglang.srt.mem_cache import evict_policy as EP
