@@ -255,6 +255,30 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 
 **정직한 한계(점 5)**: TraceLab은 논문과 다른 에이전트라 short-call busy-time이 구조적으로 빈약 → **58%·P50=1.1s에 정확히 못 맞출 수 있음**. 목표는 "**최근접 + 잔여 gap 수치 명기**", fabrication 금지. 이 gap 자체를 §한계에 정량 기록.
 
+### C-4b. ★ reshape 1차 생성 + 감사 결과 — trilemma 발견, 2-track 결정 (본 턴)
+
+병행 생성한 1차 primary(`tracelab_mori_L64k_yunuikang.jsonl`, 582세션/9,290턴)를 **jsonl에서 직접 재계산 감사**(에이전트 자기보고 불신):
+
+| 게이트 | 실측(감사) | 판정 |
+|---|---|---|
+| 스키마/세션·턴/원본 무변경 | 0오류 / 582·9,290 / 원본 mtime 불변 | ✅ |
+| peak ≤ 64k | 65,521 | ✅ PASS |
+| long-time-share(per-turn) | **58.08%** | ✅ PASS (정확) |
+| **전이 median ≥4** | **2.0** | ❌ FAIL |
+| **ι-IQR ≥0.35 (최종 trace, per-session)** | **0.258** | ❌ FAIL |
+
+**감사 catch (2건, 정밀 규명)**:
+1. **게이트 실패는 windowing이 아니라 58% blend 선택이 유발.** ≥4턴 windowed **pool 전체(3,514세션)**는 전이 median **4.0**·ι-IQR **~0.69**로 두 hard 게이트를 이미 통과한다. 58% 조준 blend가 "mixed" 세션에 편중(선택 42:379:161)해 전이 4.0→2·ι-IQR을 붕괴시킨 것.
+2. **ι-IQR은 reasoning-proxy의 uncached 정의에 민감(blend subset 한정).** 에이전트 0.643 = `uncached=claude_uncached_input_tokens`(≈3, 아주 작음), 내 감사 0.258 = `uncached=input−cached_read`. **pool에서는 두 프록시 모두 ~0.69로 무차이**; 프록시 민감성은 blend가 만든 좁은 분포에서만 증폭. **진짜 ι는 replay 시 런타임 스케줄러가 실측**(mori_idleness)하고 프록시 상수는 STEP1 보정 → **오프라인 ι-IQR 게이트는 advisory**. 전이 median은 프록시 무관(robust).
+
+**★ 구조적 trilemma (핵심)**: **58% 매칭 ⟂ (전이≥4 ∧ ι-IQR≥0.35).** 두 극: (a) pool 그대로 → 전이 4·ι-IQR 0.69 ✅ 이나 long-share ~99% ❌; (b) 58% blend → long-share 58% ✅ 이나 전이 2·ι-IQR 붕괴 ❌. 근본 원인 §5-(12). → 단일 trace로 셋 동시 불가.
+
+**결정 = 2-track (사용자 승인) — 둘 다 생성·감사 완료(본 턴)**:
+- **Track P (paper-regime)** `tracelab_mori_L64k_yunuikang.jsonl` (582세션/9,290턴): **58% 정확 매칭(58.08%)·peak≤64k PASS**. 전이/ι-IQR 게이트 **면제**(목적 아님). "논문 Fig.3 regime 재현" 렌즈.
+- **Track M (MORI-mechanism)** `tracelab_moriM_L64k_yunuikang.jsonl` (3,514세션/275,591턴): pool 전체(58% blend 제거) + ι-tercile 인터리브. **전이 median 4.0·ι-IQR 0.696·peak≤64k 전부 PASS**, long-share 98.9%(idle-heavy, by design). MORI 상대-idleness 랭킹이 발동하는 렌즈. 각 트랙 nohw ablation 동반.
+- **병기 보고**: §D-2에서 시스템 비교를 **두 렌즈 모두**로. ec128k(전이 8.6/long 96%)는 계속 대조군.
+- 게이트 스펙: Track P=58%·peak hard; Track M=전이≥4·ι-IQR≥0.35·peak hard. trilemma는 §5-(15) 기록.
+
 ---
 
 ## D. 스윕 + 프로토콜 (결정 #4 — 고정 벽시계 창 필수 승격)
@@ -272,7 +296,7 @@ native fit = 277k / peak(ec128k median 65,678) ≈ 4.2  → 논문 압박 레짐
 보고 지표(논문 §6.2와 1:1): `output_throughput_tok_s`, `step_throughput_req_s`, `ttft_mean/p95`, + `prefix_cache_hit_rate`·`local_compute` 참 recompute·GPU util(`sample_gpu_resident_yunuikang.py --gpus 0,1`)·`/health` tier 카운트.
 
 ### D-2. 스윕 축·셀 (base와 동일 + 매칭/human-wait 축)
-4종 × C{20,50,80} × r{1×,2×}(오프로딩 시스템만). Phase 2 주 trace **18셀**. 주 trace=`tracelab_mori_L64k`(§C-4 Fig.3 매칭 + L=64k), 대조=`ec128k`(+ec40k/swebench 음성대조). 엔진 재기동 최소화(HiCache OFF/1×/2× 바깥루프).
+4종 × C{20,50,80} × r{1×,2×}(오프로딩 시스템만). Phase 2 주 trace **18셀**. **주 trace = 2-track(§C-4b)**: Track P(`tracelab_mori_L64k`, 58% 매칭) + Track M(ι 이질성, 재생성 예정) 병기; 대조=`ec128k`(전이 8.6/long 96%)(+ec40k/swebench 음성대조). 엔진 재기동 최소화(HiCache OFF/1×/2× 바깥루프).
 - **human-wait ablation 축(§C-3/§C-4)**: primary(주입, CAP_HARD=300s) vs ablation(미주입) **양쪽 병기**. CAP 민감도 {300,600}.
 - **ι 층화 보고(점 6)**: aggregate가 idle-heavy여도 **저-ι stratum(busy-heavy)은 논문 유사 regime** → 시스템 비교를 **stratum별로도** 분해 보고(저-ι에서 MORI 이득이 논문에 가장 근접해야 함).
 
@@ -341,6 +365,7 @@ base §5의 8개 유효(단 **엔진 항목 반전**): 이제 **엔진이 논문
 - **(12) ★ 논문 Fig.3 분포 gap(정량, §C-4)**: TraceLab은 short 콜이 구조적으로 너무 짧아(P50 0.196s vs 논문 1.096s) busy-time이 빈약 → long-time-share가 primary 99.7%(논문 58%)로 **구조적 초과**. CAP·세션 blend로 최근접시키되 **정확히 못 맞출 수 있음**을 명기하고 잔여 gap을 결과에 병기(fabrication 금지). 저-ι stratum은 논문 유사 regime이라 stratum별 비교로 보완.
 - **(13) primary는 구성된(constructed) subset**: 논문 매칭용 세션 blend로 만든 것이라 자연 도착분포가 아님 — blend 비율·원본 분포·소스 세션 분포를 병기(§C-4-(4)).
 - **(14) TP2 no-P2P/SYS 인터커넥트**: GPU0↔GPU1이 NVLink 없이 cross-NUMA(SYS)라 P2P peer access 미지원 → `--disable-custom-all-reduce`로 NCCL fallback. TP all-reduce·PCIe 오프로딩 대역이 느려 **절대 throughput에 하향 영향**. 단 4종 시스템 모두 동일 인터커넥트라 **상대 비교는 보존**(MORI vs TA+O 결론에 영향 없음). 절대 수치를 논문과 직접 비교하지 않는다.
+- **(15) ★ 데이터 trilemma(§C-4b, 감사로 확정)**: TraceLab에서 (논문 58% regime) + (전이 median≥4) + (ι-IQR≥0.35)는 **동시 불가**. 그래서 primary를 **2-track**(Track P=58% 매칭, Track M=ι 이질성)으로 분리해 병기한다. 어느 단일 trace도 세 조건을 다 만족하지 못한다는 것 자체가 결과 해석의 전제 — MORI 이득은 두 렌즈에서 각각 보고한다.
 
 ## 6. 다음 액션
 1. **(M1, CPU-only, 완료분)** 서브에이전트/human-wait 조사(§C-3)·Fig.3 분포 측정·gap·CAP·층화(§C-4) **본 턴 완료**. 남은 것: L=64k turn-window + 세션 blend **가공 생성·스크립트화 → 다음 승인**(편집금지 유지).
