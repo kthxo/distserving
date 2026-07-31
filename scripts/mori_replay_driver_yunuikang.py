@@ -366,6 +366,21 @@ def summarize(args, backends, sessions, results, trace, wall, cyc, series,
             "cache_hit_rate_last": _agg(m_after, "sglang:cache_hit_rate"),
             "hicache_extra": {k: _agg(m_after, k) for k in extra},
         }
+    # failure-type breakdown so the sweep gate can see whether tolerated failures
+    # are transient (500/other) or a systematic recurrence (400 context / timeout).
+    ftypes: Dict[str, int] = {}
+    for r in fail:
+        e = (r.get("error") or "").lower()
+        if "400" in e:
+            k = "http_400"
+        elif "timeout" in e or "timed out" in e or "readtimeout" in e:
+            k = "timeout"
+        elif "500" in e:
+            k = "http_500"
+        else:
+            k = "other"
+        ftypes[k] = ftypes.get(k, 0) + 1
+    summary["failure_types"] = ftypes
     if fail:
         summary["sample_error"] = fail[0].get("error")
 

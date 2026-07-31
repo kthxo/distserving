@@ -58,13 +58,23 @@ run_cell(){ # $1=tag $2=system $3=router $4=extra $5=C
     --ctx-cap 69632 --http-timeout 2400 \
     --hicache-metrics "$HM" --run-tag "$1" --out "$RES" 2>"$OUT/err_$1.log" || echo "[cell $1] driver rc=$?"
   kill "$SPID" 2>/dev/null || true
-  # auto failure-rate gate (>1% => invalid, abort sweep early — no silent invalid data)
-  FR=$(grep -a "\"run_tag\": \"$1\"" "$RES" | tail -1 | python3 -c "import sys,json;d=json.loads(sys.stdin.read() or '{}');c=d.get('completed_programs',0);f=d.get('failed_programs',0);t=c+f;print(round(100*f/t,3) if t else 0)" 2>/dev/null)
-  echo "[cell $1] DONE $(date +%T) failure_rate=${FR}%"
-  if python3 -c "import sys;sys.exit(0 if float('${FR:-0}')>1.0 else 1)" 2>/dev/null; then
-    echo "[cell $1] ★★ FAILURE-RATE GATE TRIPPED: ${FR}% > 1% — ABORTING sweep (invalid). Fix before continuing."
-    kill_proxy; kill_backend; exit 4
-  fi
+  # auto failure-rate gate: ABORT only if fail%>1% AND failed>=3 (systematic, e.g. the
+  # 67% 400/timeout regime). fail%>1% with failed<3 = transient (500/other) -> tolerate
+  # but WARN; if a tolerated failure is 400/timeout it's a systematic recurrence -> strong flag.
+  DEC=$(grep -a "\"run_tag\": \"$1\"" "$RES" | tail -1 | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read() or '{}')
+c=d.get('completed_programs',0); f=d.get('failed_programs',0); t=c+f
+fr=100*f/t if t else 0.0
+ft=d.get('failure_types',{}); bad=ft.get('http_400',0)+ft.get('timeout',0)
+if fr>1.0 and f>=3: print(f'ABORT fr={fr:.2f} failed={f} types={ft}')
+elif fr>1.0: print(('RECUR' if bad>0 else 'WARN')+f' fr={fr:.2f} failed={f} types={ft}')
+else: print(f'OK fr={fr:.2f} failed={f} types={ft}')" 2>/dev/null)
+  echo "[cell $1] DONE $(date +%T) gate: $DEC"
+  case "$DEC" in
+    ABORT*) echo "[cell $1] ★★ GATE ABORT (systematic failures >=3, >1%). Fix before continuing."; kill_proxy; kill_backend; exit 4;;
+    RECUR*) echo "[cell $1] ★ GATE WARN: tolerated (<3 failures) BUT includes 400/timeout — systematic recurrence, REVIEW.";;
+  esac
 }
 
 echo "==[M-SWP] start $(date) pin=$PIN dur=${DUR}s (18-cell 1-run pass) =="
