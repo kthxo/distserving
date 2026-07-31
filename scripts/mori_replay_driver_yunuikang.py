@@ -39,8 +39,104 @@ from typing import Dict, List, Optional
 # Import the reusable machinery from the base driver (same scripts/ directory).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trace_replay_driver_yunuikang import (  # noqa: E402
-    Padder, _chat_once, run_program, load_trace, _stats,
+    Padder, load_trace, _stats, SHARED_SYSTEM_PROMPT, TURN_PROMPT,
 )
+
+
+# --------------------------------------------------------------------------
+# ctx-cap aware session runner (base run_program/_chat_once lack a context cap
+# and hardcode a 1200s timeout; Track M's large accumulated contexts on the 64k
+# engine need both). Reuses base Padder/tokenizer; base file stays unmodified.
+# --------------------------------------------------------------------------
+async def _chat(client, base_url, payload, stream, timeout):
+    t0 = time.perf_counter()
+    if not stream:
+        r = await client.post(f"{base_url}/v1/chat/completions", json=payload, timeout=timeout)
+        r.raise_for_status()
+        d = r.json()
+        return (d["choices"][0]["message"]["content"] or ""), (d.get("usage") or {}), None, time.perf_counter() - t0
+    payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    parts, usage, ttft = [], {}, None
+    async with client.stream("POST", f"{base_url}/v1/chat/completions", json=payload, timeout=timeout) as r:
+        r.raise_for_status()
+        async for raw in r.aiter_lines():
+            if not raw or not raw.startswith("data:"):
+                continue
+            chunk = raw[5:].strip()
+            if chunk == "[DONE]":
+                break
+            try:
+                obj = json.loads(chunk)
+            except json.JSONDecodeError:
+                continue
+            ch = obj.get("choices") or []
+            if ch:
+                delta = (ch[0].get("delta") or {}).get("content")
+                if delta:
+                    if ttft is None:
+                        ttft = time.perf_counter() - t0
+                    parts.append(delta)
+            if obj.get("usage"):
+                usage = obj["usage"]
+    return "".join(parts), usage, ttft, time.perf_counter() - t0
+
+
+async def run_session(client, args, padder, program_id, turns, seed, results, trace):
+    """One session=program. Accumulates context; caps prompt+output to args.ctx_cap
+    (trim oldest turns if the accumulated prompt would overflow; clamp max_tokens to
+    the remaining window) so no request 400s on context length. Sleeps tool_duration
+    (closed-loop bubble). Cancellation (deadline) propagates cleanly (partial dropped)."""
+    ctx_cap = args.ctx_cap
+    messages = [{"role": "system", "content": SHARED_SYSTEM_PROMPT}]
+    t_start = time.perf_counter()
+    completion_tokens = turns_done = offered = tmerr = 0
+    ok = True
+    for rec in turns:
+        target_in = int(rec["input_tokens"]); out_tok = max(1, int(rec["output_tokens"]))
+        tool_s = float(rec.get("tool_duration_s") or 0.0)
+        core = f"[turn {rec['turn']}] {TURN_PROMPT}"
+        user_msg, achieved = padder.build_user(messages, core, target_in, seed + rec["turn"])
+        # trim oldest (user,assistant) pairs if the prompt overflows the window
+        guard = 0
+        while achieved > ctx_cap - 32 and len(messages) > 1 and guard < 200:
+            del messages[1:3]
+            achieved = padder.count(messages + [user_msg]); guard += 1
+        messages.append(user_msg)
+        offered += achieved; tmerr += abs(target_in - achieved)
+        max_tokens = max(1, min(out_tok, ctx_cap - achieved - 8))  # fit prompt+output in window
+        if args.dry_run:
+            messages.append({"role": "assistant", "content": padder._filler_text(seed * 31 + rec["turn"], max_tokens)})
+            completion_tokens += max_tokens; turns_done += 1
+            trace.append({"program_id": program_id, "turn": rec["turn"], "target_input_tokens": target_in,
+                          "achieved_prompt_tokens": achieved})
+            continue
+        payload = {"model": args.model, "messages": messages, "max_tokens": max_tokens,
+                   "temperature": 0, "program_id": program_id}
+        try:
+            msg, usage, ttft, lat = await _chat(client, args.base_url, payload, args.stream, args.http_timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            ok = False
+            results.append({"program_id": program_id, "ok": False, "error": str(e)[:200]})
+            break
+        turns_done += 1
+        ctok = int(usage.get("completion_tokens") or 0); completion_tokens += ctok
+        trace.append({"program_id": program_id, "turn": rec["turn"], "target_input_tokens": target_in,
+                      "achieved_prompt_tokens": achieved, "server_prompt_tokens": int(usage.get("prompt_tokens") or achieved),
+                      "completion_tokens": ctok, "ttft_s": ttft, "turn_latency_s": lat, "tool_duration_s": tool_s})
+        messages.append({"role": "assistant", "content": msg})
+        if tool_s > 0:
+            await asyncio.sleep(tool_s)
+    if not args.dry_run:
+        try:
+            await client.post(f"{args.router_url}/programs/release", json={"program_id": program_id}, timeout=10)
+        except Exception:
+            pass
+    if ok:
+        results.append({"program_id": program_id, "ok": True, "program_latency_s": time.perf_counter() - t_start,
+                        "completion_tokens": completion_tokens, "turns_done": turns_done,
+                        "offered_input_tokens": offered, "token_match_err": tmerr, "finished_at": time.perf_counter()})
 
 # --------------------------------------------------------------------------
 # 3. SGLang metrics (base parsed vLLM names)
@@ -116,7 +212,7 @@ async def _worker(client, args, padder, gen, sem, results, trace, deadline, cyc)
         cyc["seen"].add(base_sid)
         cyc["max_cycle"] = max(cyc["max_cycle"], cycle)
         cyc["started"] += 1
-        await run_program(client, args, padder, pid, turns, seed, sem, results, trace)
+        await run_session(client, args, padder, pid, turns, seed, results, trace)
 
 
 async def _metric_sampler(client, backends, interval, extra, series, stop):
@@ -147,11 +243,10 @@ async def main_async(args) -> dict:
     if args.dry_run:
         # validate payload/token-match over ONE corpus pass (no duration, no HTTP)
         gen = corpus_cycler(sessions, args.seed)
-        sem = asyncio.Semaphore(args.concurrency)
         for _ in range(len(sessions)):
             pid, turns, seed, base_sid, cycle = next(gen)
             cyc["seen"].add(base_sid)
-            await run_program(None, args, padder, pid, turns, seed, sem, results, trace)
+            await run_session(None, args, padder, pid, turns, seed, results, trace)
         return summarize(args, backends, sessions, results, trace, 0.0, cyc, [])
 
     import httpx
@@ -302,6 +397,10 @@ def main() -> None:
     ap.add_argument("--duration-s", type=float, default=3600.0, help="fixed wall-clock window (paper: 1h)")
     ap.add_argument("--deadline-grace-s", type=float, default=45.0,
                     help="after duration, cancel in-flight sessions this many seconds later (hard stop)")
+    ap.add_argument("--ctx-cap", type=int, default=65536,
+                    help="context window: clamp prompt+max_tokens to this, trim oldest turns on overflow (no 400s)")
+    ap.add_argument("--http-timeout", type=float, default=2400.0,
+                    help="per-request HTTP timeout (must exceed router resume timeout 1800s)")
     ap.add_argument("--warmup-frac", type=float, default=0.2)
     ap.add_argument("--hicache-ratio", type=float, default=0.0, help="label only (0=off)")
     ap.add_argument("--metric-interval", type=float, default=15.0, help="sec between /metrics samples")

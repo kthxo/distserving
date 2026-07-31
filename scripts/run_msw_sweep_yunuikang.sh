@@ -55,9 +55,16 @@ run_cell(){ # $1=tag $2=system $3=router $4=extra $5=C
     --base-url "http://localhost:$PP" --router-url "http://localhost:$PP" --backends "http://localhost:$BP" \
     --model Qwen/Qwen3-8B --tokenizer Qwen/Qwen3-8B --router "$3" --system "$2" \
     --concurrency "$5" --duration-s $DUR --deadline-grace-s $GRACE --warmup-frac $WARM --metric-interval 30 \
+    --ctx-cap 69632 --http-timeout 2400 \
     --hicache-metrics "$HM" --run-tag "$1" --out "$RES" 2>"$OUT/err_$1.log" || echo "[cell $1] driver rc=$?"
   kill "$SPID" 2>/dev/null || true
-  echo "[cell $1] DONE $(date +%T)"
+  # auto failure-rate gate (>1% => invalid, abort sweep early — no silent invalid data)
+  FR=$(grep -a "\"run_tag\": \"$1\"" "$RES" | tail -1 | python3 -c "import sys,json;d=json.loads(sys.stdin.read() or '{}');c=d.get('completed_programs',0);f=d.get('failed_programs',0);t=c+f;print(round(100*f/t,3) if t else 0)" 2>/dev/null)
+  echo "[cell $1] DONE $(date +%T) failure_rate=${FR}%"
+  if python3 -c "import sys;sys.exit(0 if float('${FR:-0}')>1.0 else 1)" 2>/dev/null; then
+    echo "[cell $1] ★★ FAILURE-RATE GATE TRIPPED: ${FR}% > 1% — ABORTING sweep (invalid). Fix before continuing."
+    kill_proxy; kill_backend; exit 4
+  fi
 }
 
 echo "==[M-SWP] start $(date) pin=$PIN dur=${DUR}s (18-cell 1-run pass) =="

@@ -17,7 +17,8 @@ REPO=/home/yunuikang/yunuikang_work/distserving
 VENV=/home/yunuikang/yunuikang_work/.venv-sglang
 MODEL="${MODEL:-Qwen/Qwen3-8B}"
 GPUS="${GPUS:-0,1}"; TP="${TP:-2}"; PORT="${PORT:-8100}"
-MML="${MML:-65536}"                  # --context-length = L (64k)
+MML="${MML:-71680}"                  # --context-length: L(65536)+output room. Grounded: covers
+                                     # Track M p999 input+output=67,928; driver --ctx-cap 69632 clamps below this.
 MAXTOK="${MAXTOK:-262144}"           # --max-total-tokens = C_gpu pin (36 GiB); STEP1 confirms <= native
 MEMFRAC="${MEMFRAC:-0.85}"
 RATIO="${RATIO:-0}"                  # host:device HiCache ratio; 0 => HiCache OFF
@@ -34,7 +35,7 @@ export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:--ccbin /usr/bin/g++-11}"
 export MAX_JOBS="${MAX_JOBS:-16}"
 # YaRN: 64k > Qwen3-8B derived 40960. STEP1-confirmed working (native pool 265,651 tok).
 export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
-YARN='{"rope_parameters":{"rope_type":"yarn","factor":1.6,"original_max_position_embeddings":40960,"rope_theta":1000000}}'
+YARN='{"rope_parameters":{"rope_type":"yarn","factor":1.75,"original_max_position_embeddings":40960,"rope_theta":1000000}}'  # 1.75*40960=71680 >= --context-length
 
 HICACHE=()
 if [ "${RATIO%.*}" != "0" ] && [ "$RATIO" != "0" ]; then
