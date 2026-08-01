@@ -67,19 +67,31 @@
 - 원인: 컨텍스트 누적 drift + ctx-cap 트림(64k 창에 맞춰 oldest turn 제거, 실행 보장 대가로 일부 세션의 컨텍스트가 트레이스와 불일치).
 - 판정: <1%는 아니고 ~3%이나 **균일 적용** → **§5 fidelity 한계로 기록**. MORI 저성능을 설명하지 못함(균일하므로).
 
-## 5. 진단 + 다음 단계
+## 5. 진단 — TTFT 분해 + promote 방식 (무료, GPU 0; 2026-08-01)
 
-**MORI 저성능 유력 원인**: `MoriRouter`의 CPU-tier pause/promote가 엔진 HiCache와 **이중 관리** → 프로그램이 (라우터 promote 대기 + 엔진 reload) **이중 지연** → 압박에서 TTFT 폭증(2.1→14s). 스케줄러 tick(5s) 단위 promote 지연이 누적되는 것으로 추정. 저성능은 버그일 수도, 실제 결과일 수도 있어 분해 필요.
+**결론: MORI 저성능 = tick-driven 승격(5s) + ι-우선순위로 인한 재개 대기(pause) 지배.** 엔진 prefill/reload·typed eviction 아님.
 
-**권고 다음 단계**:
-1. **결정셀 repeat≥3** (C=80·r=2): MORI<TA+O 역전이 재현되는지(non-overlap 판정).
-2. **MORI-a-only ablation** (router=mori + EVICT=lru, C=80·r{1,2}): 
-   - MORI-full vs MORI-a-only → **typed eviction 기여** 분리
-   - MORI-a-only vs TA+O(router=tr) → **라우터 스케줄링 기여** 분리
-3. (병행 CPU) 라우터-엔진 이중관리 코드 점검: promote 지연·CPU tier가 실 HiCache와 어떻게 상호작용하는지.
+**(b) promote는 tick-driven [코드 확정]**: `MultiBackendRouter._scheduler_loop`(`scheduler/router.py:746-753`)가 `sleep(scheduler_interval=5s)` 후 `_scheduled_check`→`MoriRouter._mori_promote`(`mori_router.py:201,274`). 승격은 **5s tick에서만**. demote된 프로그램의 요청은 `update_program_before_request`에서 `waiting_event` 블록 → 다음 tick까지 대기(event-driven 아님).
 
-→ 원인(스케줄러 promote 지연 vs typed eviction)을 규명한 뒤 결론. 무료(GPU 무증분) TTFT 분해(기존 데이터의 ttft 분포)도 병행.
+**(a) TTFT는 pause 지배 [근거 추론]**:
+| 셀 | ttft p50 | mean | p95 | cacheHit |
+|---|---|---|---|---|
+| TAO_r2_C80 | 3.4 | 53.4 | 120.6 | 87% |
+| MORI_r2_C80 | 13.9 | 94.9 | **398.7** | 78% |
+| MORI_r1_C80 | 9.1 | 100.4 | **563.8** | 68% |
+- cacheHit 78–88% → 재개 요청의 엔진 prefill/reload 작음(~1–2s). 그런데 p50 13.9s·**p95 398–564s(≈80 tick×5s = starvation)** → **TTFT ≈ pause + ~2s prefill**, pause 지배.
+- TA+O(같은 tick·엔진) p50 3.4s → 차이는 MoriRouter 3-tier churn + ι-우선 승격이 **갓-활성(high windowed-ι) 프로그램을 뒤로 밀어** 재개 지연. cacheHit MORI(78%)<TAO(87%)는 typed eviction의 부차 흔적.
+
+**수정안(리뷰 후 구현, 미구현) — event-driven 승격**:
+1. `update_program_before_request`에서 demote 감지 시 `pause_resume_lock` 하에 `remaining_capacity ≥ total_tokens+BUFFER`이면 **즉시 promote**(tick 대기 제거).
+2. 용량 부족 시 GPU 내 **최고-ι(더 idle) 프로그램이 요청 프로그램보다 idle하면 demote**해 자리 확보 후 승격(상대-idleness 입장제어를 도착 시점 적용).
+3. 불가 시 tick 폴백(드묾). pending은 windowed-ι 무관 승격 최우선(starvation 방지). 주기 tick은 rebalance 안전망(5s→1–2s 병행 고려).
+
+**다음 단계**:
+- **event-driven 수정 우선**(pause 지배 명확) → 리뷰 후 구현·재런치.
+- [GPU, 후순위] MORI-a-only ablation(router=mori+EVICT=lru, C=80·r{1,2}): typed eviction 기여 분리(수정 전/후 비교 또는 확정용).
+- repeat는 후순위(패턴 단조·일관, 노이즈 아님).
 
 ---
 
-> 상태: 1런 패스 완료·정지. GPU 유휴. 다음 GPU 잡(repeat/ablation)은 별도 승인 후.
+> 상태: 1런 패스 완료 + 진단 완료·정지. GPU 유휴. event-driven 수정 구현/재런치는 별도 승인 후.
