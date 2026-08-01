@@ -99,4 +99,31 @@ async def update_program_before_request(pid, state, payload):
 
 ---
 
-> 상태: 분석·설계 완료. **구현·GPU 없음.** 리뷰 후 승인 시 C-2/C-3 구현 → 격리·유닛 검증 → 재검증(최악셀) → 재런치. (동일 M-SWP 실험의 후속 재런치 결과는 이 실험 로그 계열에 이어 기록.)
+## D. 결함 2: typed eviction이 논문 정책과 불일치 [코드↔논문 대조, 2026-08-01]
+
+> 결함 1(§B) = 라우터 승격 정책(ι-정렬+5s tick 굶음). **결함 2 = 엔진 typed eviction이 논문 §4.3(typed eviction) 정책을 부분적으로만 따름.** 논문 인용은 `MORI.pdf`(arXiv:2606.00866v1) typed-eviction 문단 직접 대조.
+
+### D-1. 논문 정책 [논문-인용]
+- **타입 부여 = 스케줄러 큐 배치 기준(ι 크기 아님)**: GPU 큐→**busy**, CPU 큐로 offload→**idle**, Waiting 큐→**inactive**. (3-type)
+- **축출 순서(양 tier 반전, LRU tie-break)**:
+  - GPU HBM: **inactive → idle → busy** (busy 마지막 보존)
+  - CPU DRAM: **inactive → busy → idle** (idle 마지막 보존)
+
+### D-2. 우리 구현 [측정, 코드 위치 명기]
+- `MoriRouter._type_rank`(`scheduler/mori_router.py:89-98`): 타입을 **ι 임계 버킷**으로 부여 — ι<0.33→**2(busy)**, 0.33≤ι<0.66→**1(mixed)**, ι≥0.66→**0(idle)**. 스탬프는 요청 시점 `update_program_before_request`(`mori_router.py:84`, `payload["priority"]`).
+- 엔진 패치(`scripts/mori_hicache_yunuikang.py`): device=stock `priority` forward 정렬 `(priority,last_access)`(`:66`) → **idle→mixed→busy**; host=reversed `(-priority,last_access)`(`_MoriHostStrategy`, `:54-55`; `evict_host` 게이팅 `:83-91`) → **busy→mixed→idle**. tie-break=`last_access_time`(LRU) ✅.
+
+### D-3. 불일치 3건 [판정]
+1. **inactive 타입 누락(가장 큰 결함)**: 논문은 **양 tier 모두 "inactive 먼저 축출"**하나, 우리는 inactive 타입 자체가 없어 Waiting-큐(재개 안 하는) 프로그램 KV가 우선 축출되지 않음. GPU/CPU 어디서도 inactive-first 미적용.
+2. **타입 부여 기준 상이**: 논문=**큐 배치**(GPU/CPU/Waiting→busy/idle/inactive), 우리=요청시점 **ι 크기 버킷**. 예: CPU로 내려간(논문상 idle) 프로그램도 스탬프 순간 ι<0.33이면 우리 코드에선 busy=2로 찍힘 → tier 배치와 타입이 어긋날 수 있음.
+3. **논문에 없는 mixed=1 버킷 추가**: 논문은 busy/idle/inactive 3-type만.
+- **일치하는 부분**: 두 tier 간 순서 반전 설계, GPU=busy 보존/CPU=idle 보존이라는 busy↔idle 방향, LRU tie-break은 논문과 일치.
+- **부정확한 주석**: `mori_hicache_yunuikang.py:21`이 host 순서를 `"busy→idle→inactive"`로 서술하나 실제는 `busy→mixed→idle`(idle=0을 inactive로 오기). 코드 동작과 불일치하는 주석.
+
+### D-4. 조치 [결정]
+- **코드 무수정, 로그 기록만**(현 단계). M-SWP 진단·데이터는 유효(결함 2는 cacheHit 78 vs 87% 등 typed-eviction의 부차 효과에만 영향; 헤드라인 역전의 주원인은 결함 1=승격 굶음, §B). 결함 2 단독 기여는 MORI-a-only ablation(router=mori+EVICT=lru)으로 분리 가능.
+- **교수님 방향 결정 후, faithful 재현으로 가면 결함 1(승격)+결함 2(typed eviction)를 함께 수정 → 단일 재현 런.** 결함 2 수정안(설계): `_type_rank`를 ι-버킷이 아니라 **프로그램 큐 상태(GPU/CPU/Waiting→busy/idle/inactive)** 기반으로 바꾸고, inactive에 최저 우선순위 부여(양 tier inactive-first), mixed 제거.
+
+---
+
+> 상태: 분석·설계 완료. **구현·GPU 없음.** 결함 1(§B/§C)·결함 2(§D) 모두 코드 무수정으로 기록. 리뷰·교수님 방향 결정 후 faithful 재현 시 결함 1+2 함께 수정 → 격리·유닛 검증 → 재검증(최악셀) → **단일 재현 런**. (동일 M-SWP 실험의 후속 결과는 이 로그 계열에 이어 기록.)
