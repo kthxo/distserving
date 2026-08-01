@@ -9,6 +9,30 @@
 
 ---
 
+## 0. 시스템 정의 — 4종 무엇이 다른가
+
+한 코드베이스에서 **플래그 3개**(라우터 모드 / HiCache 오프로딩 / eviction 정책)만 바꿔 4종을 A/B 한다. 각 시스템은 앞 시스템에 기능을 하나씩 얹는 **누적(ablation) 구조**다.
+
+| 시스템 | 프록시 라우터 | 엔진 HiCache | eviction 정책 | 핵심: 무엇을 더하나 |
+|---|---|---|---|---|
+| **SMG** | `--router default` (순수 프록시, 스케줄링 없음) | OFF | (engine LRU) | 아무 제어 없음. DP=1이라 요청을 엔진에 직결 포워딩. **하한 baseline** |
+| **TA** | `--router tr` (용량 스케줄링) | OFF | (engine LRU) | + **스케줄러**: GPU 용량 초과 시 프로그램을 pause(Waiting 큐, KV 폐기)·resume(admission control). 오프로딩은 없음 |
+| **TA+O** | `--router tr` (동일) | **ON** `--hicache-ratio r` | engine LRU(native) | + **오프로딩**: 엔진이 GPU에서 밀린 KV를 host DRAM(HiCache)로 내림→재사용. 스케줄러는 TA와 동일, host tier는 엔진이 LRU로 자율 관리 |
+| **MORI** | `--router mori` (ι 3-tier) | **ON** `--hicache-ratio r` | **`mori`** (typed) | + **(a) ι-스케줄러**: 상대 idleness(ι=acting/(acting+reasoning))로 GPU/CPU/Waiting **3-tier** demote(ι 큰 것 먼저)/promote(ι 작은 것 먼저) + **(b) typed eviction**: program 타입(busy/idle)을 KV 노드에 스탬프해 host는 busy 먼저 축출(idle KV 보존) |
+
+**누적 분해(각 단계가 무엇을 격리)**:
+- SMG → TA: **스케줄러(admission control)** 의 가치
+- TA → TA+O: **KV 오프로딩(host tier)** 의 가치
+- TA+O → MORI: **ι-배치 + typed eviction** 의 추가 가치 (= 논문 헤드라인 주장, **P1**)
+
+**r1 / r2 (CPU:GPU 용량비)** — 오프로딩 시스템(TA+O·MORI)에만 적용:
+- HiCache **host tier 크기 = r × device KV 풀**. `r1` = host 1×(≈device), `r2` = host 2×.
+- device 풀은 `--max-total-tokens 262144`(≈36 GiB)로 고정, host는 r1≈262k tok / r2≈524k tok.
+- r↑ = 더 많은 KV가 host에 상주 가능(재계산↓) — 단 host↔device 재적재(load_back) 트래픽↑(goguma6은 NVLink 없는 SYS/PCIe라 이 비용이 큼).
+- SMG·TA는 오프로딩이 없어 r 축이 없다(표에서 `r0`로 표기).
+
+**공통 조건**(전 시스템 동일): Qwen3-8B TP2(GPU0,1) · YaRN 64k(context-length 71680) · pin `--max-total-tokens 262144` · primary trace = Track M(117k턴) · 고정 1h · C{20,50,80} · 동일 드라이버(순환셔플·ctx-cap 69632). → 차이는 오직 위 3개 플래그이므로 **상대 비교가 시스템 효과를 격리**한다.
+
 ## 1. 전 18셀 결과 (out tok/s | ttft_p50 s | steady_turns)
 
 | 시스템 | C=20 | C=50 | C=80 |
