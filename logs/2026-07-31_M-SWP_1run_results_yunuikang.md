@@ -1,7 +1,8 @@
-# M-SWP 1런 패스 중간 리포트
+# M-SWP 헤드라인 스윕 — 결과 + 정량 진단(결함 1·2) + 수정설계 (통합 로그)
 
-> 작성 2026-08-01 · 브랜치 `mori` · **HEAD `86ec401`** · 서버 goguma6 (RTX 5090 ×2, SGLang 0.5.10 + HiCache, YaRN 64k)
-> 원시 데이터: `/home/yunuikang/yunuikang_work/scratch/mori/msw/results_msw.jsonl` (18/18 셀, 셀당 1런)
+> 작성 2026-08-01 (진단·GPU util·결함2·레짐 정량·수정설계 통합 2026-08-02) · 브랜치 `mori` · **HEAD `86ec401`** · 서버 goguma6 (RTX 5090 ×2, SGLang 0.5.10 + HiCache, YaRN 64k)
+> **통합 이력**: `MORI_rootcause_quant`·`MORI_reproduce_regime-match` 로그를 본 파일로 병합 후 삭제(동일 실험 = 단일 문서 규칙).
+> 원시 데이터: `scratch/mori/msw/results_msw.jsonl`(18셀) · `scratch/mori/msw/gpu_*.jsonl`(util/mem CSV) · `scratch/mori/msw/serve_*.log` · Track M `scratch/traces/tracelab_moriM_L64k_yunuikang.jsonl` · 논문 `MORI.pdf`(arXiv:2606.00866v1)
 > 무효(pre-fix) 참고본: `.../results_msw_INVALID_prefix_0334.jsonl` (context/timeout 버그 시기 5셀, 폐기)
 > 프로토콜: 고정 1h(`--duration-s 3600`, hard-deadline+grace) · Track M primary(117,257턴, decode152) · pin `--max-total-tokens 262144` · context-length 71680(YaRN factor 1.75) · warmup 20% · C 워커 순환셔플
 > **failure-rate 게이트**: `fail% >1% AND failed_programs ≥3` → 조기중단(systematic만). 1–2건 transient는 관용 + failure_types 기록.
@@ -82,16 +83,59 @@
 - cacheHit 78–88% → 재개 요청의 엔진 prefill/reload 작음(~1–2s). 그런데 p50 13.9s·**p95 398–564s(≈80 tick×5s = starvation)** → **TTFT ≈ pause + ~2s prefill**, pause 지배.
 - TA+O(같은 tick·엔진) p50 3.4s → 차이는 MoriRouter 3-tier churn + ι-우선 승격이 **갓-활성(high windowed-ι) 프로그램을 뒤로 밀어** 재개 지연. cacheHit MORI(78%)<TAO(87%)는 typed eviction의 부차 흔적.
 
-**수정안(리뷰 후 구현, 미구현) — event-driven 승격**:
-1. `update_program_before_request`에서 demote 감지 시 `pause_resume_lock` 하에 `remaining_capacity ≥ total_tokens+BUFFER`이면 **즉시 promote**(tick 대기 제거).
-2. 용량 부족 시 GPU 내 **최고-ι(더 idle) 프로그램이 요청 프로그램보다 idle하면 demote**해 자리 확보 후 승격(상대-idleness 입장제어를 도착 시점 적용).
-3. 불가 시 tick 폴백(드묾). pending은 windowed-ι 무관 승격 최우선(starvation 방지). 주기 tick은 rebalance 안전망(5s→1–2s 병행 고려).
-
-**다음 단계**:
-- **event-driven 수정 우선**(pause 지배 명확) → 리뷰 후 구현·재런치.
-- [GPU, 후순위] MORI-a-only ablation(router=mori+EVICT=lru, C=80·r{1,2}): typed eviction 기여 분리(수정 전/후 비교 또는 확정용).
-- repeat는 후순위(패턴 단조·일관, 노이즈 아님).
+(정량 root-cause·수정 설계는 §7·§10으로 통합.)
 
 ---
 
-> 상태: 1런 패스 완료 + 진단 완료·정지. GPU 유휴. event-driven 수정 구현/재런치는 별도 승인 후.
+## 6. 압박 레짐 정량화 — 우리 vs 논문  [측정 + 논문-인용]
+
+- KV 풀(device) = **262,144 tok**(pin). Track M 컨텍스트 median 32,376 / peak 65,536 → **fit 8.10 / 4.00**. **oversub = C/fit**:
+
+| C | oversub(fit 8.1) | oversub(fit 4.0) |
+|---|---|---|
+| 20 | 2.5× | 5.0× |
+| 50 | 6.2× | 12.5× |
+| **80** | **9.9×** | **20.0×** |
+
+- 유효 압박(idle-heavy 보정, 세션 ι mean 0.517) ≈ **4.7×** [추정]. host tier r1=524k/r2=786k tok이나 host↔device reload가 SYS/PCIe(NVLink 없음)로 느림.
+- 논문 [논문-인용, PLAN §D-5]: C=20을 "겨우 fit"으로 사이징, baseline이 C=80서도 수백 tok/s(비-붕괴). 우리 C=80 baseline은 한 자릿수(6.5–14.3) → **우리가 명백히 더 빡센 초과구독**(fit 대조 + throughput 둘 다).
+- **★ 레짐 정정(구 regime-match 결론 통합)**: 저-oversub(C=20·r2)에선 MORI가 오히려 **+12%(1.12× throughput)**로 논문 방향과 정합. 역전은 oversub **6~10×(논문 미검증 범위 >~4×)**에서만. 즉 관측된 역전은 **순수 코드버그가 아니라, 작은 HBM(fit 8)이 강제한 극단 레짐에서 아래 결함들이 드러난 것 = HW 레짐 한계.** 결함 1·2는 faithful 재현 시 함께 수정 대상.
+
+## 7. 결함 1 — 승격 굶음 정량 체인 (§5 진단의 정량판)  [측정→계산/추론]
+
+① C=80 fit 8.1 → 상주 ≈8, 승격 라운드 free slot ≈0–few. ② `_mori_promote`(`mori_router.py:274`)가 cpu_pending을 **ι 오름차순** 정렬 → 방금 툴콜 끝낸 높은-ι pending이 매 라운드 꼬리 = 굶음. ③ 관측 TTFT p95 **398s(r2)/564s(r1)** ÷ 5s tick ≈ **80/113 라운드 대기**(②와 정합). ④ 승격은 `_scheduler_loop`(`router.py:746-753`)의 5s tick에서만(event-driven 아님) → 도착즉시 승격 경로 없음. ⑤ [추론] cacheHit 78% → 엔진 prefill ~1.4s(serve log ~5000 tok/s 역산)인데 관측 p50 13.9s → **pause ≈12.4s 지배**. ⑥ [측정] 같은 엔진 TA+O p50 3.4s → **승격-대기 오버헤드 ≈10s(p50)/278s(p95)**. **원인 = 라우터 승격 정책(ι-정렬 + 5s tick), 엔진/typed eviction 아님.**
+
+## 8. 결함 1 GPU util 근거 (샘플러 집계)  [측정]
+
+`sample_gpu_resident_yunuikang.py`가 nvidia-smi util/mem을 셀별 `gpu_<tag>.jsonl`(CSV)에 샘플. warmup 20% 제외, 두 GPU 평균 util% (mean/median):
+
+| system | C=20 | C=50 | C=80 (·p=avg paused) |
+|---|---|---|---|
+| SMG | 100/100 | 100/100 | 100/100 |
+| TA | 73/100 | 82/100 | 83/100 p65 |
+| **TA+O r2** | 70/100 | 67/100 | **73/100 p70** |
+| **MORI r2** | 73/100 | 82/100 | **90/100 p54** |
+| MORI r1 | 84/100 | 90/100 | 94/100 p60 |
+
+- **MORI util이 TA+O보다 높은데(C80 90% vs 73%) throughput은 절반 이하** → **high-util·low-throughput = churn/recompute 낭비**(cacheHit 78 vs 87%, 3-tier thrash)와 정합. median util 전 셀 100%.
+- 굶음은 **GPU idle이 아니라 프로그램-레벨 admission 지연**: paused 평균도 MORI가 낮음(C80 54 vs 70) → GPU를 비운 게 아님. 원시 `scratch/mori/msw/gpu_*.jsonl`(mem 컬럼 = KV 상주량 별도 가용).
+
+## 9. 결함 2 — typed eviction 논문 불일치  [코드↔논문 대조]
+
+- **논문 [논문-인용, `MORI.pdf` §4.3]**: 타입 = 스케줄러 큐 배치(GPU=busy / CPU=idle / Waiting=inactive), 축출 GPU=`inactive→idle→busy` / CPU=`inactive→busy→idle`, LRU tie-break.
+- **우리 [측정]**: 타입 = ι 임계 버킷(`_type_rank` `mori_router.py:89-98`: ι<0.33→2, 0.33–0.66→**mixed=1**, ≥0.66→0), device forward / host reversed(`mori_hicache_yunuikang.py:54-66, 83-91`) → GPU `idle→mixed→busy` / CPU `busy→mixed→idle`.
+- **불일치 3건**: ① **inactive 타입 누락**(양 tier inactive-first 미적용, 최대 결함) ② 타입기준 상이(큐 배치 vs ι 크기) ③ 논문에 없는 mixed 추가. (일치: tier 반전·busy↔idle 방향·LRU). 부정확 주석 `mori_hicache_yunuikang.py:21`(host를 "busy→idle→inactive"로 오기).
+- 영향: cacheHit 78 vs 87% 등 **부차 효과에 국한**; 헤드라인 역전 주원인은 결함 1. 단독 기여는 MORI-a-only(EVICT=lru) ablation으로 분리.
+
+## 10. 수정 설계 (faithful 재현 시 결함 1+2 함께 = 단일 런)  [설계, 미구현]
+
+- **결함 1(승격)**: (a) event-driven 승격 — `update_program_before_request`에서 demote 감지 시 용량 있으면 tick 대기 없이 즉시 promote + `waiting_event.set()`; (b) pending은 ι 아닌 **aging(waiting_since) 우선** 정렬(굶음 제거), non-pending만 ι; (c) make-room = 최고-ι demote(단 pending/방금활성 제외 + `min_dwell`); (d) tick은 rebalance 안전망(5s→1–2s). `program/state.py` +`waiting_since`.
+- **결함 2(typed eviction)**: `_type_rank`를 ι-버킷 → **큐 상태(GPU/CPU/Waiting→busy/idle/inactive)** 기반으로, inactive 최저 우선순위(양 tier inactive-first), mixed 제거.
+- **격리**: `--router tr|default`(baseline) 무손상. 유닛테스트: 즉시-promote / pending-aging / make-room 제외 / inactive-first.
+- **예상** [정성 예측]: TTFT p95 ~80 tick→≤1 tick, p50 pause ~12s→~1–2s(엔진 prefill만). P1 재역전 여부는 재런치로 검증(예측이지 보장 아님).
+
+**다음 단계**: 교수님 방향 결정(A Pro6000 재현 / B 5090 정책수정 / C 부분종결) → faithful 재현 선택 시 **결함 1+2 함께 구현 → 격리·유닛 검증 → 최악셀 재검증 → 단일 재런치**(결과는 이 로그에 이어 기록). [GPU 후순위] MORI-a-only ablation으로 결함 2 단독 기여 분리.
+
+---
+
+> 상태: 1런 패스 + 정량 진단(결함 1·2) + 수정설계 완료·정지. **GPU 유휴, 코드 무수정.** rootcause·regime-match 로그를 본 로그로 통합(중복 제거). 구현/재런치는 방향 결정 후 승인 시.
