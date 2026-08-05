@@ -166,7 +166,7 @@ G2의 4출처는 전부 `max_total_num_tokens` **장부**를 읽으므로, 실�
 | attention backend | **triton** | 5090 하네스와 동일. F1↔5090 C80의 차이를 **하드웨어 하나로** 묶어 두는 것이 F1 통제군의 전부다(계획 §6.2). **모든 H200 셀에서 동일하게 유지**한다 |
 | TP | **1** | weights 14.19 GiB가 단일 H200에 적합 → all-reduce 소멸(§1.3). `--disable-custom-all-reduce` 불필요 |
 | `--mem-fraction-static` | **0.90** | 계획 §4 [추정]. 전 fit 셀에서 **동일**해야 캡만 변수로 남는다 |
-| numactl | `--cpunodebind=0 --membind=0` | GPU0 = NUMA node 0. HiCache host pool을 node-local로 |
+| numactl | **`--cpunodebind=0` 단독** (`--membind` 불가 — §9 개정) | GPU0 = NUMA node 0. HiCache host pool을 node-local로 |
 | YaRN | factor 2.1875 / `rope_parameters` 키 | transformers 5.3.0에서 `rope_scaling` → `rope_parameters` 개명 |
 
 ## 8. 신규 파일
@@ -177,3 +177,41 @@ G2의 4출처는 전부 `max_total_num_tokens` **장부**를 읽으므로, 실�
 | `scripts/fit_gate_yunuikang.py` | 게이트 본체 G0~G4 + G6. JSON 1줄 + exit 0/1. **Phase 1 전 셀 재사용** |
 | `scripts/run_fit_gate_f1_yunuikang.sh` | F1 단축 검증 + 2점 감도 러너 |
 | `logs/2026-08-05_H200_GATE_PREREG_yunuikang.md` | 이 문서 |
+
+---
+
+## 9. 개정 기록
+
+### 9.1 (2026-08-05 16:30 UTC) numactl `--membind` 철회 — 환경 제약, **측정 이전**
+
+**언제**: 첫 F1 기동 시도가 weights 로드 전에 죽은 직후. **측정값은 단 한 건도 나오기 전이다.**
+게이트 임계값·probe 사양·판정 축은 **하나도 바뀌지 않았다.**
+
+**무엇이 일어났나** [측정]:
+```
+get_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+setting membind: Operation not permitted
+```
+`numactl --membind` / `--preferred`는 `set_mempolicy(2)`를 요구하는데, 이 컨테이너는 unprivileged라
+해당 호출이 EPERM이다. 엔진이 기동조차 못 했다.
+
+**대체와 그 등가성** [측정]:
+
+| 시도 | 결과 |
+|---|---|
+| `--cpunodebind=0 --membind=0` | EPERM |
+| `--preferred=0` | EPERM |
+| **`--cpunodebind=0` 단독** | **성공** |
+| 기본 mempolicy (`numactl --show`) | `policy: default` · `preferred node: current` |
+
+기본 정책이 **first-touch local 할당**이므로, 모든 스레드를 node 0에 묶으면(`--cpunodebind=0`)
+할당도 node 0에 떨어진다. HiCache host pool의 NUMA 지역성(계획 §1.3 dial ③)이라는 목적에는 등가다.
+**전 셀에 동일하게 적용**하며, 이후 변경 시 다시 이 절에 기록한다.
+
+### 9.2 (동시각) `wait_gpu_idle` 카운트 버그 수정 — 러너 전용, 판정 무관
+
+5090 스크립트에서 가져온 `nvidia-smi ... | grep -c . || echo 0` 관용구는 compute proc이 0일 때
+grep이 "0"을 출력하면서 **exit 1**을 내므로 `|| echo 0`이 두 번째 "0"을 덧붙여 `n="0\n0"`이 된다.
+그 결과 GPU가 유휴인데도 "잔존"으로 판정해 60초를 낭비했다. `awk 'NF{c++} END{print c+0}'`로 교체.
+**판정 항목과 무관한 러너 편의 코드**다.

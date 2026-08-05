@@ -67,9 +67,15 @@ fi
 export PYTHONPATH="$REPO/scripts:${PYTHONPATH:-}"
 export SGLANG_MORI_PATCH=1
 
+# NUMA pinning: --cpunodebind ONLY. `--membind`/`--preferred` need set_mempolicy(2), which
+# is EPERM in this unprivileged container [측정 2026-08-05: "set_mempolicy: Operation not
+# permitted"; the engine died before loading weights]. Dropping it is not a compromise here:
+# the default policy is `policy: default / preferred node: current` = first-touch local
+# allocation, so with every thread bound to node 0 the HiCache host pool still lands on
+# node 0. See the amendment record in logs/2026-08-05_H200_GATE_PREREG_yunuikang.md §9.
 NUMA=()
-if command -v numactl >/dev/null 2>&1; then
-  NUMA=(numactl --cpunodebind="$NUMA_NODE" --membind="$NUMA_NODE")
+if command -v numactl >/dev/null 2>&1 && numactl --cpunodebind="$NUMA_NODE" true 2>/dev/null; then
+  NUMA=(numactl --cpunodebind="$NUMA_NODE")
 fi
 
 echo "[serve-h200-7b] MODEL=$MODEL GPUS=$GPUS TP=$TP PORT=$PORT MML=$MML MAXTOK=$MAXTOK (fit=$(python3 -c "print(f'{$MAXTOK/32376:.2f}')")) MEMFRAC=$MEMFRAC RATIO=$RATIO EVICT=$EVICT NUMA=$NUMA_NODE log=$LOG"

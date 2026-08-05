@@ -36,8 +36,11 @@ kill_backend(){
 trap 'kill_backend' EXIT
 
 wait_gpu_idle(){
+  # NOTE: `| grep -c . || echo 0` (the 5090 script's idiom) is broken — with no compute procs
+  # grep prints "0" AND exits 1, so `|| echo 0` appends a second "0" and the test never matches.
+  # Count with awk instead, which exits 0 either way.
   for _ in $(seq 1 30); do
-    n=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . || echo 0)
+    n=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | awk 'NF{c++} END{print c+0}')
     [ "$n" = "0" ] && { echo "   [gpu] compute procs=0 (유휴)"; return 0; }
     sleep 2
   done
