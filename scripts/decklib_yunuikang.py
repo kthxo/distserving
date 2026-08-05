@@ -34,6 +34,37 @@ def _blank(prs):
     return prs.slides.add_slide(prs.slide_layouts[6])
 
 
+def _md_runs(para, text, bold_default=False):
+    """`**...**` 구간을 굵은 run 으로 쪼개 para 에 채운다.
+
+    파서가 없으면 별표가 슬라이드에 그대로 찍힌다 — 이 함수가 유일한 처리 지점이다.
+    반환: [(run, is_bold_marked)] — 색·크기는 호출자(_tf)가 나중에 입힌다.
+    """
+    out = []
+    for k, seg in enumerate(text.split("**")):
+        if not seg:
+            continue
+        r = para.add_run()
+        r.text = seg
+        marked = (k % 2 == 1)          # 홀수 조각 = ** 사이
+        out.append((r, marked or bold_default))
+    if not out:                        # 빈 문자열도 run 하나는 있어야 서식이 붙는다
+        out.append((para.add_run(), bold_default))
+    return out
+
+
+def _set_md_text(tf, text, bold_default=False):
+    """텍스트프레임 전체를 줄 단위 문단 + 마크다운 굵기로 채운다."""
+    tf.clear()
+    marks = []
+    for i, line in enumerate(str(text).split("\n")):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        for r in p.runs:               # clear() 후에도 남는 빈 run 정리
+            r._r.getparent().remove(r._r)
+        marks += _md_runs(p, line, bold_default)
+    return marks
+
+
 def _tf(shape, size, color=INK, bold=False, align=PP_ALIGN.LEFT, italic=False):
     tf = shape.text_frame
     tf.word_wrap = True
@@ -45,39 +76,49 @@ def _tf(shape, size, color=INK, bold=False, align=PP_ALIGN.LEFT, italic=False):
             r.font.name = "Arial"
 
 
+def _fill(shape, text, size, color=INK, bold=False, align=PP_ALIGN.LEFT, italic=False):
+    """마크다운 굵기를 살려 텍스트프레임을 채우고 서식을 입힌다."""
+    tf = shape.text_frame
+    tf.word_wrap = True
+    marks = _set_md_text(tf, text, bold_default=bold)
+    for p in tf.paragraphs:
+        p.alignment = align
+    for r, is_bold in marks:
+        r.font.size = Pt(size); r.font.color.rgb = color
+        r.font.bold = is_bold; r.font.italic = italic
+        r.font.name = "Arial"
+    return shape
+
+
 def add_title(slide, text, y=0.28, size=27, color=INK, w=12.6, x=0.42):
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(0.9))
-    tb.text_frame.text = text
-    _tf(tb, size, color, bold=True)
-    return tb
+    return _fill(tb, text, size, color, bold=True)
 
 
 def add_takeaway(slide, text, y=1.12, size=15, color=BLUE, w=12.6, x=0.42):
     """One-line key message under the title."""
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(0.55))
-    tb.text_frame.text = text
-    _tf(tb, size, color, bold=True, italic=True)
-    return tb
+    return _fill(tb, text, size, color, bold=True, italic=True)
 
 
 def add_text(slide, text, x, y, w, h, size=13, color=INK, bold=False, align=PP_ALIGN.LEFT):
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
-    tb.text_frame.text = text
-    _tf(tb, size, color, bold=bold, align=align)
-    return tb
+    return _fill(tb, text, size, color, bold=bold, align=align)
 
 
 def add_bullets(slide, items, x, y, w, h, size=13, gap=6):
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = tb.text_frame; tf.word_wrap = True
+    tf.clear()
     for i, (txt, lvl, col, bold) in enumerate(items):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-        p.text = ("•  " if lvl == 0 else "–  ") + txt
+        for r in p.runs:
+            r._r.getparent().remove(r._r)
         p.level = lvl
         p.space_after = Pt(gap)
-        for r in p.runs:
+        for r, is_bold in _md_runs(p, ("•  " if lvl == 0 else "–  ") + txt, bold):
             r.font.size = Pt(size); r.font.color.rgb = col
-            r.font.bold = bold; r.font.name = "Arial"
+            r.font.bold = is_bold; r.font.name = "Arial"
     return tb
 
 
@@ -101,9 +142,7 @@ def add_figure(slide, name, x, y, max_w, max_h, frame=True):
 
 def add_caption(slide, text, x, y, w, size=10.5, color=GRAY, align=PP_ALIGN.CENTER):
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(0.35))
-    tb.text_frame.text = text
-    _tf(tb, size, color, italic=True, align=align)
-    return tb
+    return _fill(tb, text, size, color, italic=True, align=align)
 
 
 def add_table(slide, rows, x, y, w, h, header=True, fs=12, hdr_fs=12,
@@ -119,28 +158,28 @@ def add_table(slide, rows, x, y, w, h, header=True, fs=12, hdr_fs=12,
     for i, row in enumerate(rows):
         for j, val in enumerate(row):
             c = gt.cell(i, j)
-            c.text = str(val)
             c.margin_left = Inches(0.05); c.margin_right = Inches(0.05)
             c.margin_top = Inches(0.02); c.margin_bottom = Inches(0.02)
             c.vertical_anchor = MSO_ANCHOR.MIDDLE
-            para = c.text_frame.paragraphs[0]
-            para.alignment = PP_ALIGN.CENTER if j > 0 else PP_ALIGN.LEFT
-            run = para.runs[0] if para.runs else para.add_run()
-            run.font.name = "Arial"
-            if header and i == 0:
+            is_hdr = header and i == 0
+            force_bold = is_hdr or (i in highlight_rows and i > 0) or \
+                (highlight_col is not None and j == highlight_col and i > 0)
+            marks = _set_md_text(c.text_frame, val, bold_default=force_bold)
+            for para in c.text_frame.paragraphs:
+                para.alignment = PP_ALIGN.CENTER if j > 0 else PP_ALIGN.LEFT
+            if is_hdr:
                 c.fill.solid(); c.fill.fore_color.rgb = hdr_bg
-                run.font.size = Pt(hdr_fs); run.font.bold = True; run.font.color.rgb = hdr_fg
+            elif i in highlight_rows:
+                c.fill.solid(); c.fill.fore_color.rgb = highlight_rows[i]
+            elif zebra and i % 2 == 0:
+                c.fill.solid(); c.fill.fore_color.rgb = LT
             else:
-                run.font.size = Pt(fs); run.font.color.rgb = INK
-                if i in highlight_rows:
-                    c.fill.solid(); c.fill.fore_color.rgb = highlight_rows[i]
-                    run.font.bold = True
-                elif zebra and i % 2 == 0:
-                    c.fill.solid(); c.fill.fore_color.rgb = LT
-                else:
-                    c.fill.solid(); c.fill.fore_color.rgb = WHITE
-                if highlight_col is not None and j == highlight_col and i > 0:
-                    run.font.bold = True
+                c.fill.solid(); c.fill.fore_color.rgb = WHITE
+            for run, is_bold in marks:
+                run.font.name = "Arial"
+                run.font.size = Pt(hdr_fs if is_hdr else fs)
+                run.font.color.rgb = hdr_fg if is_hdr else INK
+                run.font.bold = is_bold
     return gt
 
 
@@ -162,7 +201,5 @@ def chip(slide, text, x, y, w, color, fg=WHITE, size=11, h=0.34):
     sh = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
     sh.fill.solid(); sh.fill.fore_color.rgb = color; sh.line.fill.background()
     sh.shadow.inherit = False
-    sh.text_frame.text = text
-    _tf(sh, size, fg, bold=True, align=PP_ALIGN.CENTER)
-    sh.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    _fill(sh, text, size, fg, bold=True, align=PP_ALIGN.CENTER)
     return sh

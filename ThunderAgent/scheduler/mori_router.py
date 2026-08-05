@@ -266,8 +266,14 @@ class MoriRouter(MultiBackendRouter):
             items = tier.items()
             if not items:
                 break
-            # Evict highest-ι first (least likely to resume soon on GPU).
-            items.sort(key=lambda x: self._iota(x[1], now), reverse=True)
+            # Typed eviction (paper §4.3.2): highest-ι first (least likely to resume
+            # soon on GPU), and **within the same type, LRU breaks ties** — the
+            # least-recently-used program is evicted first.
+            # Key is (-ι, last_access) with no `reverse`, so both terms sort ascending
+            # in the intended direction: -ι ascending == ι descending, and last_access
+            # ascending == oldest first. (Using reverse=True with a tuple would flip
+            # the tie-break to most-recently-used.)
+            items.sort(key=lambda x: (-self._iota(x[1], now), tier.last_access(x[0])))
             pid, state = items[0]
             self._evict_cpu_to_waiting(tier, pid, state, now)
 
