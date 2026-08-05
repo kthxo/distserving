@@ -16,16 +16,33 @@ engine SAYS N. It does not prove the allocator ENFORCES N. So:
   G4 behavioural probe    load the engine past N and watch the allocator   <-- THE POINT
   G6 two-point slope      dN/dMAXTOK == 1.00 +- 0.05 across two cells (--slope-check)
 
-G4's three axes are what make this a two-sided proof, and each catches a DIFFERENT
-failure. They are not redundant:
-  P-a  max(num_used_tokens) <= N          catches "cap ignored, real pool is the 2.1M
-                                          profiled one" (used would climb past N)
-  P-b  max(num_used_tokens) >= 0.80 x N   catches "LEDGER > ACTUAL" — the only axis that
+G4 measures ACTUAL resident capacity by eviction arithmetic. Every offered token is
+either still in the pool or was evicted from it, so
+
+    resident_est = offered_unique_tokens - delta(evicted_tokens_total)
+
+and when the probe offers more than the pool holds, resident_est IS the real capacity.
+Its two bounds catch opposite failures, and P-c guards the whole thing:
+  P-a  resident_est <= 1.05 x N           catches "cap ignored, the real pool is the 2.1M
+                                          profiled one" (all 1.60 x N offered would fit)
+  P-b  resident_est >= 0.80 x N           catches "LEDGER > ACTUAL" — the only axis that
                                           does. All four G2 sources read the same ledger,
-                                          and a real capacity of e.g. 100k would still
-                                          satisfy P-a AND P-c. Pre-registered criterion.
+                                          so a real capacity of e.g. 100k passes G2 cleanly.
   P-c  delta evicted_tokens_total > 0     catches "the cap was never reached" (probe too
-                                          weak / no pressure), which would make P-a vacuous
+                                          weak), which would make resident_est meaningless
+
+WHY NOT num_used_tokens — 2026-08-05 amendment, see PREREG §9.3. The first version of this
+gate read `sglang:num_used_tokens` for P-a/P-b. That gauge is
+    num_used = max_total_num_tokens - (available_size + evictable_size)
+[measured: managers/scheduler_runtime_checker_mixin.py:44-49], i.e. it EXCLUDES the radix
+cache's evictable residency and counts only in-flight protected KV. Two consequences:
+  * P-b was unreachable by construction — in-flight is bounded by concurrency x prompt
+    (4 x 32,376 = 129,504), and the observed peak was 128,705, 99.4% of that bound, never
+    the 0.80 x 262,246 = 209,797 the criterion asked for. It FAILED on the F1 run.
+  * P-a was an arithmetic identity — num_used <= N holds always, so it could not fail even
+    if the cap were ignored (the value would go negative, not above N).
+The 0.80 fraction is UNCHANGED; only the quantity it applies to was corrected. The original
+F1 FAIL record stands; the corrected run is a separate label (F1b).
 
 EVERYTHING in PREREG below — thresholds AND the probe load spec — is pre-registered and
 frozen before the first boot (see logs/2026-08-05_H200_GATE_PREREG_yunuikang.md, committed
@@ -81,7 +98,12 @@ PREREG = {
     "PROBE_CONCURRENCY": 4,
     "PROBE_MAX_NEW_TOKENS": 8,
     "PROBE_SAMPLE_HZ": 1.0,
-    "P_B_FRAC": 0.80,          # P-b: max(num_used_tokens) >= 0.80 x N
+    "P_B_FRAC": 0.80,          # P-b: resident_est >= 0.80 x N. The FRACTION is unchanged
+                               # from the original pre-registration; only the quantity it
+                               # applies to was corrected (PREREG §9.3).
+    "P_A_UPPER": 1.05,         # P-a: resident_est <= 1.05 x N. 5% = the tolerance TOL_PCT
+                               # already uses; absorbs the 1 Hz counter edge and the
+                               # shared-prefix correction.
     # G6
     "SLOPE_TOL": 0.05,         # dN/dMAXTOK == 1.00 +- 0.05
 }
@@ -344,12 +366,14 @@ def build_probe_prompts(tokenizer_name, n_req, target_tok):
     tok = AutoTokenizer.from_pretrained(tokenizer_name)
     pad = Padder(tok)
     base = [{"role": "system", "content": SHARED_SYSTEM_PROMPT}]
+    shared_prefix = pad.count(base)   # counted once in the radix tree, n_req times in the
+                                      # per-request prompt lengths -> subtracted below
     out = []
     for i in range(n_req):
         user, achieved = pad.build_user(base, "Reply with the single word OK.",
                                         target_tok, seed=10_000 + i)
         out.append((base + [user], achieved))
-    return out
+    return out, shared_prefix
 
 
 class MetricsSampler(threading.Thread):
@@ -383,7 +407,7 @@ def g4_probe(rep, backend, log_n, model_name, tokenizer_name):
     print(f"  ... building {n_req} x {ptok:,}-token prompts "
           f"(offered {offered:,} tok = {offered/log_n:.2f} x pool)")
     try:
-        prompts = build_probe_prompts(tokenizer_name, n_req, ptok)
+        prompts, shared_prefix = build_probe_prompts(tokenizer_name, n_req, ptok)
     except Exception as e:
         rep.add("G4", FAIL, f"probe prompt build failed: {e!r}")
         return
@@ -411,15 +435,17 @@ def g4_probe(rep, backend, log_n, model_name, tokenizer_name):
         payload = {"model": model_name, "messages": msgs,
                    "max_tokens": PREREG["PROBE_MAX_NEW_TOKENS"], "temperature": 0.0}
         t0 = time.time()
+        comp = 0
         try:
-            status, _body = http_post_json(backend + "/v1/chat/completions", payload)
+            status, body = http_post_json(backend + "/v1/chat/completions", payload)
             ok = status == 200
+            comp = int((body.get("usage") or {}).get("completion_tokens") or 0)
         except urllib.error.HTTPError as e:
             status, ok = e.code, False
         except Exception:
             status, ok = -1, False
         with lock:
-            results.append({"i": idx, "status": status, "ok": ok,
+            results.append({"i": idx, "status": status, "ok": ok, "completion": comp,
                             "s": round(time.time() - t0, 2)})
 
     t_start = time.time()
@@ -435,38 +461,68 @@ def g4_probe(rep, backend, log_n, model_name, tokenizer_name):
         time.sleep(0.2)
     probe_s = time.time() - t_start
 
-    time.sleep(2.0)                      # let one more metrics tick land
+    time.sleep(3.0)                      # let the last evictions land in the counter
     sampler.stop_flag.set()
     sampler.join(timeout=5)
 
-    used = [s["num_used_tokens"] for s in sampler.samples if s["num_used_tokens"] is not None]
+    # Read the eviction counter directly (not via the 1 Hz sampler) so the arithmetic uses
+    # the settled final value rather than the last sampled tick.
+    try:
+        ev1 = metric_value(http_get(backend + "/metrics", timeout=15),
+                           "sglang:evicted_tokens_total")
+    except Exception:
+        ev1 = None
     evs = [s["evicted_tokens_total"] for s in sampler.samples
            if s["evicted_tokens_total"] is not None]
-    peak = max(used) if used else None
-    d_ev = (max(evs) - ev0) if evs else None
+    if ev1 is None:
+        ev1 = max(evs) if evs else None
+    d_ev = (ev1 - ev0) if ev1 is not None else None
+
+    used = [s["num_used_tokens"] for s in sampler.samples if s["num_used_tokens"] is not None]
+    peak = max(used) if used else None    # RECORDED ONLY — in-flight KV, not pool residency
     n_ok = sum(1 for r in results if r["ok"])
 
-    print(f"  ... probe done in {probe_s:.1f}s, {len(sampler.samples)} metric samples, "
-          f"peak num_used_tokens={peak if peak is None else f'{peak:,.0f}'}")
+    # offered unique KV: prompt tokens + generated tokens, minus the shared system prefix
+    # counted once in the radix tree but n_req times in the prompt lengths.
+    achieved = sum(a for _, a in prompts)
+    generated = sum(r.get("completion", 0) for r in results)
+    offered_unique = achieved + generated - (n_req - 1) * shared_prefix
+    resident_est = (offered_unique - d_ev) if d_ev is not None else None
 
-    if peak is None:
-        rep.add("P-a", FAIL, "sglang:num_used_tokens never sampled — cannot judge enforcement")
-        rep.add("P-b", FAIL, "sglang:num_used_tokens never sampled")
+    print(f"  ... probe done in {probe_s:.1f}s, {len(sampler.samples)} metric samples; "
+          f"offered_unique={offered_unique:,} evicted={0 if d_ev is None else int(d_ev):,} "
+          f"-> resident_est={'n/a' if resident_est is None else f'{resident_est:,.0f}'}")
+
+    rep.add("P-0", PASS, f"instrument: offered_unique={offered_unique:,} "
+                         f"(prompts {achieved:,} + gen {generated:,} - shared prefix "
+                         f"{n_req - 1}x{shared_prefix:,}); peak in-flight num_used_tokens="
+                         f"{'n/a' if peak is None else f'{peak:,.0f}'} (RECORDED, not a "
+                         f"criterion — see PREREG §9.3)",
+            offered_unique=offered_unique, peak_used_tokens=None if peak is None else int(peak),
+            padder_achieved=achieved, generated=generated, shared_prefix=shared_prefix)
+
+    if resident_est is None:
+        rep.add("P-a", FAIL, "evicted_tokens_total unreadable — resident capacity unmeasurable")
+        rep.add("P-b", FAIL, "evicted_tokens_total unreadable — resident capacity unmeasurable")
     else:
-        rep.add("P-a", PASS if peak <= log_n else FAIL,
-                f"peak num_used_tokens={peak:,.0f} <= pool {log_n:,} "
-                f"({'enforced' if peak <= log_n else 'CAP NOT ENFORCED — plan invalid'})",
-                peak_used_tokens=int(peak))
-        thr = PREREG["P_B_FRAC"] * log_n
-        rep.add("P-b", PASS if peak >= thr else FAIL,
-                f"peak num_used_tokens={peak:,.0f} >= {PREREG['P_B_FRAC']:.2f} x pool "
-                f"= {thr:,.0f} (actual capacity matches the ledger from below)",
-                p_b_threshold=int(thr))
+        hi = PREREG["P_A_UPPER"] * log_n
+        rep.add("P-a", PASS if resident_est <= hi else FAIL,
+                f"resident_est={resident_est:,.0f} <= {PREREG['P_A_UPPER']:.2f} x pool "
+                f"= {hi:,.0f} "
+                f"({'cap enforced' if resident_est <= hi else 'CAP NOT ENFORCED — plan invalid'})",
+                resident_est=int(resident_est), p_a_threshold=int(hi))
+        lo = PREREG["P_B_FRAC"] * log_n
+        rep.add("P-b", PASS if resident_est >= lo else FAIL,
+                f"resident_est={resident_est:,.0f} >= {PREREG['P_B_FRAC']:.2f} x pool "
+                f"= {lo:,.0f} (ratio {resident_est/log_n:.4f} — actual capacity matches the "
+                f"ledger from below)",
+                p_b_threshold=int(lo), resident_ratio=round(resident_est / log_n, 4))
     if d_ev is None:
-        rep.add("P-c", FAIL, "sglang:evicted_tokens_total never sampled")
+        rep.add("P-c", FAIL, "sglang:evicted_tokens_total never read")
     else:
         note = ("pool saturated, cap reached" if d_ev > 0 else
-                "cap never reached — the probe exerted no pressure, so P-a is vacuous")
+                "cap never reached — the probe exerted no pressure, so resident_est is "
+                "just the offered load and P-a/P-b say nothing")
         rep.add("P-c", PASS if d_ev > 0 else FAIL,
                 f"evicted_tokens_total delta={d_ev:,.0f} ({note})",
                 evicted_delta=int(d_ev))

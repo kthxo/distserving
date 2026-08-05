@@ -22,6 +22,8 @@ BP="${BP:-8123}"
 F1_MAXTOK=262246          # round(8.10 x 32,376)  — plan §4.1 fit grid
 F4_MAXTOK=647520          # round(20.00 x 32,376) — plan §4.1 fit grid
 BOOT_TIMEOUT_S="${BOOT_TIMEOUT_S:-900}"
+TAG1="${TAG1:-F1}"        # label of the F1 run (F1b for the §9.3 corrected-instrument re-run)
+SKIP_F4="${SKIP_F4:-0}"   # 1 = F1 step only (F4/G6 already recorded)
 mkdir -p "$OUT"
 source "$VENV/bin/activate"
 
@@ -67,26 +69,32 @@ echo "############ §7.1b FIT GATE  start $(date) ############"
 echo "  results -> $RES"
 
 # ── step 1: F1 + behavioural probe ──────────────────────────────────────────
-boot $F1_MAXTOK F1 || exit 1
+boot $F1_MAXTOK "$TAG1" || exit 1
 python "$REPO/scripts/fit_gate_yunuikang.py" \
-  --backend "http://127.0.0.1:$BP" --log "$OUT/serve_F1.log" \
-  --target-maxtok $F1_MAXTOK --ratio 0 --probe --tag F1 --out "$RES"
+  --backend "http://127.0.0.1:$BP" --log "$OUT/serve_$TAG1.log" \
+  --target-maxtok $F1_MAXTOK --ratio 0 --probe --tag "$TAG1" --out "$RES"
 RC1=$?
-echo "   [F1] gate rc=$RC1"
+echo "   [$TAG1] gate rc=$RC1"
 
-# ── step 2: F4, static gate only (two-point sensitivity) ────────────────────
-boot $F4_MAXTOK F4 || exit 1
-python "$REPO/scripts/fit_gate_yunuikang.py" \
-  --backend "http://127.0.0.1:$BP" --log "$OUT/serve_F4.log" \
-  --target-maxtok $F4_MAXTOK --ratio 0 --tag F4 --out "$RES"
-RC2=$?
-echo "   [F4] gate rc=$RC2"
+RC2=0; RC3=0
+if [ "$SKIP_F4" = "1" ]; then
+  kill_backend
+  echo "   [F4] SKIP (SKIP_F4=1 — 이미 기록됨)"
+else
+  # ── step 2: F4, static gate only (two-point sensitivity) ──────────────────
+  boot $F4_MAXTOK F4 || exit 1
+  python "$REPO/scripts/fit_gate_yunuikang.py" \
+    --backend "http://127.0.0.1:$BP" --log "$OUT/serve_F4.log" \
+    --target-maxtok $F4_MAXTOK --ratio 0 --tag F4 --out "$RES"
+  RC2=$?
+  echo "   [F4] gate rc=$RC2"
 
-kill_backend
+  kill_backend
 
-# ── step 3: G6 slope ────────────────────────────────────────────────────────
-python "$REPO/scripts/fit_gate_yunuikang.py" --slope-check "$RES"
-RC3=$?
+  # ── step 3: G6 slope ─────────────────────────────────────────────────────
+  python "$REPO/scripts/fit_gate_yunuikang.py" --slope-check "$RES"
+  RC3=$?
+fi
 
 echo "############ FIT GATE DONE $(date)  F1=$RC1 F4=$RC2 slope=$RC3 ############"
 [ "$RC1" = "0" ] && [ "$RC2" = "0" ] && [ "$RC3" = "0" ] \

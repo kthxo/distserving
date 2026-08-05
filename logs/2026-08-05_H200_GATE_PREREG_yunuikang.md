@@ -110,10 +110,13 @@ Padder로 만든 **32,376 tok × 13개 (= 1.60 × N)**, 요청별 고유 seed로
 prefix 공유를 차단(공유되는 것은 ~150토큰 system prompt뿐), concurrency 4, `max_tokens=8`,
 `/metrics` 1 Hz 샘플링.
 
-| # | 조건 | **이 축만이 잡는 실패** |
+> ⚠️ **P-a·P-b의 계측기는 §9.3에서 교체되었다** (2026-08-05, F1 run 직후). 아래 원문은 보존한다.
+> 현행 정의는 §9.3을 보라. **분수 0.80은 바뀌지 않았다.**
+
+| # | 조건 (원문) | **이 축만이 잡는 실패** |
 |---|---|---|
-| **P-a** | `max(num_used_tokens) ≤ N` | 캡 무시 — 실제 풀이 profiled 2.1M인 경우 (used가 N을 넘어간다) |
-| **P-b** | `max(num_used_tokens) ≥ 0.80 × N` | **장부 > 실제.** 유일하게 이걸 잡는 축이다 |
+| **P-a** | ~~`max(num_used_tokens) ≤ N`~~ → §9.3 | 캡 무시 — 실제 풀이 profiled 2.1M인 경우 (used가 N을 넘어간다) |
+| **P-b** | ~~`max(num_used_tokens) ≥ 0.80 × N`~~ → §9.3 | **장부 > 실제.** 유일하게 이걸 잡는 축이다 |
 | **P-c** | `Δevicted_tokens_total > 0` | 캡에 닿지 않음 — 압박이 없으면 P-a가 공허해진다 |
 | **P-d** | 13개 전부 200 OK | 캡이 요청 실패를 유발 |
 | P-e | padder `token_match_err` | 기록 전용, 판정 아님 |
@@ -209,7 +212,48 @@ setting membind: Operation not permitted
 할당도 node 0에 떨어진다. HiCache host pool의 NUMA 지역성(계획 §1.3 dial ③)이라는 목적에는 등가다.
 **전 셀에 동일하게 적용**하며, 이후 변경 시 다시 이 절에 기록한다.
 
-### 9.2 (동시각) `wait_gpu_idle` 카운트 버그 수정 — 러너 전용, 판정 무관
+### 9.3 (2026-08-05 16:40 UTC) ★ P-a·P-b **계측기 교체** — 임계값은 불변, F1의 FAIL은 보존
+
+**언제**: F1 run 완료 직후. **F1의 판정(P-b FAIL)은 기록에 그대로 남기고, 교체된 계측기로 도는 것은
+`F1b`라는 새 라벨의 별도 run이다.** 원래 결과를 대체하지 않는다.
+
+**무엇이 틀렸나** [측정, `managers/scheduler_runtime_checker_mixin.py:44-49`]:
+```python
+num_used = self.max_total_num_tokens - (available_size + evictable_size)
+```
+`sglang:num_used_tokens`는 **evictable(radix 캐시 상주분)을 제외**하고 in-flight 보호 KV만 센다.
+그래서 두 축이 모두 무효였다:
+
+| 축 | 무엇이 잘못됐나 | F1 실측 |
+|---|---|---|
+| **P-b** | in-flight는 `conc × prompt = 4 × 32,376 = 129,504`가 상한 → **`0.80 × 262,246 = 209,797`은 도달 불가능** | peak 128,705 = 상한의 **99.4%** → FAIL |
+| **P-a** | `num_used ≤ N`은 **산술적 항등식**(위 식에서 자명) → 캡이 무시돼도 값은 음수로 갈 뿐 N을 넘지 않는다 | 통과했으나 **공허** |
+
+`sglang:token_usage`도 분자가 같아 대안이 못 되고, `evictable_size`/`available_size` 게이지는 노출되지 않는다.
+
+**교체된 계측기 — 축출 산술**. 제공된 모든 토큰은 *풀에 남아 있거나 축출되었거나* 둘 중 하나다:
+```
+offered_unique = Σ 프롬프트 실현 토큰 + Σ 생성 토큰 − (n_req − 1) × 공유 system prefix
+resident_est   = offered_unique − Δevicted_tokens_total
+```
+제공량이 풀보다 크면 `resident_est`가 곧 **실제 상주 용량**이다.
+
+| # | **현행 조건** | 잡는 실패 |
+|---|---|---|
+| **P-a** | `resident_est ≤ 1.05 × N` | 캡 무시 — 실제 풀이 profiled 2.1M이면 1.60×N이 통째로 들어간다 |
+| **P-b** | `resident_est ≥ 0.80 × N` | **장부 > 실제** (분수 0.80 **불변**) |
+| **P-c** | `Δevicted_tokens_total > 0` | 압박 미발생 — 그러면 `resident_est`는 제공량일 뿐이라 P-a·P-b가 무의미해진다 |
+
+`P_A_UPPER = 1.05`는 이 게이트가 이미 쓰는 `TOL_PCT = ±5%`와 같은 값이며, 1 Hz 카운터 샘플링
+가장자리와 공유 prefix 보정을 흡수한다. `Δevicted`는 샘플러 마지막 틱이 아니라 **probe 종료 3초 후
+직접 조회**한 값을 쓴다. peak `num_used_tokens`는 계속 기록하되 **판정에 쓰지 않는다**(P-0 항목).
+
+**왜 이것이 임계값 완화가 아닌가**: 분수 0.80은 그대로이고, 바뀐 것은 **그 분수를 적용할 양**이다.
+원래 P-b가 재려던 것은 처음부터 "실제 상주 용량 대 장부"였고, `num_used_tokens`는 그 양을 재지 않았다.
+F1에서 사후로 계산한 값(`420,888 − 160,570 = 260,318`, 장부의 0.9926)이 이미 기준을 넘지만
+**그것은 사후 계산이므로 P-b 통과로 치지 않는다.** F1b에서 사전 등록된 식으로 다시 잰다.
+
+### 9.2 (2026-08-05 16:30 UTC) `wait_gpu_idle` 카운트 버그 수정 — 러너 전용, 판정 무관
 
 5090 스크립트에서 가져온 `nvidia-smi ... | grep -c . || echo 0` 관용구는 compute proc이 0일 때
 grep이 "0"을 출력하면서 **exit 1**을 내므로 `|| echo 0`이 두 번째 "0"을 덧붙여 `n="0\n0"`이 된다.
