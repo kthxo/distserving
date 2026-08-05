@@ -45,11 +45,28 @@ kill_backend(){
   pkill -9 -f "sglang::" 2>/dev/null
   sleep 8; BPID=""
 }
+# SIGTERM 만으로는 안 죽는다 [측정 2026-08-05: 체인 검증 후 tr/mori 프록시 2개가 살아남아
+# 포트 9000을 계속 물고 있었다]. stale 프록시가 남으면 이후 모든 셀이 기동 실패하거나 —
+# 더 나쁘게는 — 드라이버가 **이전 셀의 라우터**에 붙는다. TERM -> KILL -> 포트 확인까지 한다.
 kill_proxy(){
-  for pid in $(pgrep -f "bin/thunderagent" 2>/dev/null); do
-    cl=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-    case " $cl " in *" --port $PP "*) kill "$pid" 2>/dev/null;; esac
+  local pids sig
+  for sig in TERM KILL; do
+    pids=""
+    for pid in $(pgrep -f "bin/thunderagent" 2>/dev/null); do
+      cl=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+      case " $cl " in *" --port $PP "*) pids="$pids $pid";; esac
+    done
+    [ -z "$pids" ] && break
+    kill -$sig $pids 2>/dev/null
+    for _ in $(seq 1 10); do
+      curl -sf -m 2 "http://127.0.0.1:$PP/health" >/dev/null 2>&1 || break
+      sleep 1
+    done
   done
+  # 포트가 정말 비었는지 최종 확인 — 안 비었으면 그 사실을 로그에 남긴다(셀은 MODE 체크가 잡는다)
+  if curl -sf -m 2 "http://127.0.0.1:$PP/health" >/dev/null 2>&1; then
+    echo "   [warn] 포트 $PP 가 여전히 응답한다 — stale 프록시 잔존 가능"
+  fi
   sleep 2
 }
 kill_samplers(){ [ -n "$SPID" ] && kill "$SPID" 2>/dev/null; [ -n "$EPID" ] && kill "$EPID" 2>/dev/null; SPID=""; EPID=""; }
