@@ -80,6 +80,12 @@ def main():
         verdicts["P1"] = spread <= P1_SPREAD
         L.append(f"- **P1** (저 C 동률, ≤{P1_SPREAD:.0%}): 최대 {hi:.2f} / 최소 {lo:.2f} → "
                  f"차 **{spread:.1%}** → {'✅ 성립' if verdicts['P1'] else '❌ 불성립'}")
+        # 진단 기록 (PREREG §E.8) — 판정 아님. P1 실패 시 원인이 SMG 인지 프로토콜인지 가른다.
+        v3 = {k: v for k, v in v20.items() if k != "SMG"}
+        hi3, lo3 = max(v3.values()), min(v3.values())
+        sp3 = (hi3 - lo3) / hi3 if hi3 else float("inf")
+        L.append(f"  - (기록·판정 아님) SMG 제외 3종 spread = **{sp3:.1%}** — "
+                 f"{'4종만 갈린다 → 원인은 SMG 구조적 약세, 프로토콜 아님' if (spread > P1_SPREAD and sp3 <= P1_SPREAD) else '3종도 갈린다 → §6.4대로 프로토콜·트레이스 의심'} (§E.8)")
     else:
         L.append("- **P1**: C=20 미완 — 판정 보류")
 
