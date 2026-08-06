@@ -27,7 +27,10 @@ BP=8123; PP=9000
 C=80; RATIO=2
 DUR="${DUR:-1800}"; GRACE="${GRACE:-60}"; WARM="${WARM:-0.2}"
 SETTLE="${SETTLE:-60}"   # §5.3: 셀 종료 후 CSV mtime이 60초 지난 뒤에만 집계
-MODEL=Qwen/Qwen2.5-7B-Instruct
+MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+SERVE="${SERVE:-$REPO/scripts/_serve_sglang_7b_tp1_h200_mori_yunuikang.sh}"
+VERDICT_MODE="${VERDICT_MODE:-sweep}"   # sweep(rev3 fit 스윕) | model-confound(rev4 8B)
+AFTER_F1="${AFTER_F1:-sweep}"           # sweep = F2~F4 진행 | stop = F1에서 종료
 BOOT_TIMEOUT_S="${BOOT_TIMEOUT_S:-900}"
 HM="sglang:hicache_host_used_tokens,sglang:hicache_host_total_tokens,sglang:evicted_tokens_total,sglang:load_back_tokens_total,sglang:cached_tokens_total,sglang:prompt_tokens_total,sglang:generation_tokens_total"
 
@@ -41,6 +44,7 @@ BPID=""; SPID=""; EPID=""
 kill_backend(){
   [ -n "$BPID" ] && kill "$BPID" 2>/dev/null
   pkill -9 -f "_serve_sglang_7b_tp1_h200_mori_yunuikang" 2>/dev/null
+  pkill -9 -f "_serve_sglang_8b_tp1_h200_mori_yunuikang" 2>/dev/null
   pkill -9 -f "sglang.launch_server" 2>/dev/null
   pkill -9 -f "sglang::" 2>/dev/null
   sleep 8; BPID=""
@@ -88,7 +92,7 @@ boot_backend(){ # $1=EVICT  $2=MAXTOK  $3=tag
   local lg="$OUT/serve_$3.log"
   log "==[$3] backend boot EVICT=$1 MAXTOK=$2 RATIO=$RATIO"
   MAXTOK="$2" RATIO=$RATIO EVICT="$1" PORT=$BP MEMFRAC=0.90 LOG="$lg" \
-    nohup bash "$REPO/scripts/_serve_sglang_7b_tp1_h200_mori_yunuikang.sh" >/dev/null 2>&1 &
+    nohup bash "$SERVE" >/dev/null 2>&1 &
   BPID=$!
   for i in $(seq 1 $((BOOT_TIMEOUT_S/3))); do
     curl -sf "http://127.0.0.1:$BP/health" >/dev/null 2>&1 && { log "   READY ~$((i*3))s"; return 0; }
@@ -199,13 +203,13 @@ if [ ! -s "$PROGRESS" ]; then
   {
     echo "# H200 Phase 1 진행 상황 (자동 append)"
     echo
-    echo "- 시작: $(date '+%Y-%m-%d %H:%M:%S %Z') · C=$C · r=$RATIO · 셀당 ${DUR}s · Qwen2.5-7B TP1"
+    echo "- 시작: $(date '+%Y-%m-%d %H:%M:%S %Z') · C=$C · r=$RATIO · 셀당 ${DUR}s · **모델 $MODEL** · TP1"
     echo "- 사전 등록: \`logs/2026-08-05_H200_GATE_PREREG_yunuikang.md\` §10 · 계획 rev3 §5.1 Phase 1"
     echo "- goodput은 **점추정이 아니라 TTFT 순서통계 구간**이다 (드라이버가 per-turn을 저장하지 않음, PREREG §10.6)"
     echo "- Waiting 축출은 시스템마다 **다른 사건**이다 — MORI: \`CPU->Waiting\`, TA+O: \`Paused program\`. 절대값 비교 불가"
     echo
-    echo "| 셀 | fit | 상태 | 시작 | 종료 | thr(드라이버) | thr(엔진) | goodput@5s | MORI÷TA+O | Waiting축출 | ping-pong | steady턴 | 비고 |"
-    echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    echo "| 셀 | fit | 상태 | 시작 | 종료 | thr(드라이버) | thr(엔진) | TTFT p50 | TTFT p95 | goodput@5s | MORI÷TA+O | Waiting축출 | ping-pong | steady턴 | 비고 |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
   } > "$PROGRESS"
 fi
 
@@ -217,9 +221,9 @@ log "  셀당 ${DUR}s · 예상 $(python3 -c "print(f'{8*($DUR+240)/3600:.1f}')"
 run_fit F1 8.10 262246
 
 if python "$REPO/scripts/phase1_f1_verdict_yunuikang.py" \
-     --summary-json "$SUMJ" --progress "$PROGRESS" --fit-label F1; then
-  if [ "${SMOKE:-0}" = "1" ]; then
-    log "★ SMOKE=1 — 체인 검증 모드이므로 F2~F4로 진행하지 않는다"
+     --summary-json "$SUMJ" --progress "$PROGRESS" --fit-label F1 --mode "$VERDICT_MODE"; then
+  if [ "${SMOKE:-0}" = "1" ] || [ "$AFTER_F1" = "stop" ]; then
+    log "★ F1에서 종료 (SMOKE=${SMOKE:-0} AFTER_F1=$AFTER_F1) — F2~F4로 진행하지 않는다"
   else
   log "★ F1 재현 확인 — F2~F4 자동 진행"
   run_fit F2 12.00 388512

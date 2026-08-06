@@ -35,6 +35,9 @@ def main():
     ap.add_argument("--summary-json", required=True)
     ap.add_argument("--progress", required=True)
     ap.add_argument("--fit-label", default="F1")
+    ap.add_argument("--mode", default="sweep", choices=["sweep", "model-confound"],
+                    help="sweep: rev3 fit 스윕 분기 / model-confound: rev4 8B 재실행 분기. "
+                         "수치 규칙(0.60·두 지표·4상태)은 동일하고 해석문만 다르다")
     args = ap.parse_args()
 
     cells = {}
@@ -89,13 +92,36 @@ def main():
         lines.append(f"- **주지표 MORI÷TA+O (드라이버) = "
                      f"{'n/a' if rd is None else f'{rd:.3f}'}** "
                      f"({'≤' if rd is not None and rd <= THRESHOLD else '>'} {THRESHOLD:.2f})")
+        for k, lab in (("ttft_p50_s", "TTFT p50"), ("ttft_p95_s", "TTFT p95")):
+            a, b = mori.get(k), tao.get(k)
+            r = (a / b) if (a and b) else None
+            lines.append(f"- {lab}: MORI {a} / TAO {b} → 비 "
+                         f"{'n/a' if r is None else f'{r:.2f}x'} (기록 항목, 판정 아님)")
         lines.append(f"- **부지표 MORI÷TA+O (엔진) = "
                      f"{'n/a' if re_ is None else f'{re_:.3f}'}** "
                      f"({'≤' if re_ is not None and re_ <= THRESHOLD else '>'} {THRESHOLD:.2f})")
     lines.append("")
     lines.append(f"### 판정: **{verdict}** — {reason}")
     lines.append("")
-    if verdict == "REPRODUCED":
+    if args.mode == "model-confound":
+        # rev4 §5.1 — 모델을 5090에 맞췄으므로 남는 차이는 interconnect/TP 하나다.
+        if verdict == "REPRODUCED":
+            lines.append("→ **원인은 ④ 모델/KV밀도다.** 8B에서 붕괴가 재현됐다 — 7B가 이겼던 것은 "
+                         "KV가 가벼워(56 vs 144 KiB/tok) 같은 fit에서도 압박이 덜했기 때문으로 "
+                         "설명된다. 진짜 축은 fit이 아니라 **KV밀도**다. (계획 §0.6 후보 ④ 확정)")
+        elif verdict == "NOT_REPRODUCED":
+            lines.append("→ **원인은 ③ interconnect/TP다.** 모델·KV밀도·셀길이를 5090에 맞췄는데도 "
+                         "붕괴가 재현되지 않았다 → 남는 차이는 TP2/SYS/cross-NUMA뿐이다. "
+                         "(계획 §0.6 후보 ③ 확정 · 5090에서 TP1로 재확인하면 닫힌다)")
+        elif verdict == "DISAGREE":
+            lines.append("→ **판단 보류.** 두 계측기가 갈렸다. 어느 쪽을 믿을지는 사전 등록이 "
+                         "정하지 않았고, 결과를 보고 정하면 사후 선택이 된다.")
+        else:
+            lines.append("→ **중단.** 셀이 온전하지 않아 판정 불가. 로그를 확인할 것.")
+        lines.append("")
+        lines.append("**어느 경우든 Phase 1은 여기서 끝난다** — rev4의 Phase 1은 이 2셀이 전부다. "
+                     "다음은 Phase 2(7B, C 스윕)이며 사람이 결정한다.")
+    elif verdict == "REPRODUCED":
         lines.append("→ F2 · F3 · F4로 **자동 진행**. 하드웨어 교란요인이 닫혔으므로 fit 스윕의 "
                      "상승분을 fit에 귀속할 수 있다.")
     elif verdict == "NOT_REPRODUCED":

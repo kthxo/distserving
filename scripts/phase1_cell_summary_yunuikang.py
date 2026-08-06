@@ -166,6 +166,21 @@ def main():
                     ratio_eng = out["engine_thr_tok_s"] / et
     out["ratio_driver_mori_over_tao"] = ratio_drv
     out["ratio_engine_mori_over_tao"] = ratio_eng
+    # TTFT 비도 기록한다 (판정 아님 — PREREG §11.3). §6.3 부판정이 TTFT p50을 요구하고,
+    # p95 꼬리 악화가 구조적임이 5090 대조로 확인됐으므로(§0.6) 매 셀 남긴다.
+    if args.system == "MORI" and os.path.exists(args.summary_json):
+        for line in open(args.summary_json, errors="replace"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                p2 = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if p2.get("fit_label") == args.fit_label and p2.get("system") == "TAO":
+                for k in ("ttft_p50_s", "ttft_p95_s"):
+                    a, b = out.get(k), p2.get(k)
+                    out[f"ratio_{k}_mori_over_tao"] = (a / b) if (a and b) else None
 
     with open(args.summary_json, "a") as f:
         f.write(json.dumps(out) + "\n")
@@ -181,7 +196,8 @@ def main():
 
     row = (f"| {args.tag} | {args.fit_label} (fit {args.fit:.2f}) | {args.status} | "
            f"{ts(args.t_start)} | {ts(args.t_end)} | {fmt(out['driver_thr_tok_s'])} | "
-           f"{fmt(out['engine_thr_tok_s'])} | {gb_s} | {ratio_s} | "
+           f"{fmt(out['engine_thr_tok_s'])} | {fmt(out['ttft_p50_s'])} | "
+           f"{fmt(out['ttft_p95_s'])} | {gb_s} | {ratio_s} | "
            f"{fmt(out['waiting_evict'], 'd')} | {fmt(out['pingpong_pct'], '.0f')}% | "
            f"{fmt(out['steady_turns'], 'd')} | {args.note} |")
     with open(args.progress, "a") as f:
