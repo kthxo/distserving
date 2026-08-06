@@ -104,8 +104,11 @@ boot_backend(){ # $1=EVICT  $2=MAXTOK  $3=tag
 
 # §7.1b per-cell gate. probe 없음 — 부하를 주면 셀을 오염시키고, 캡 강제는 F1b에서 확증됐다.
 run_gate(){ # $1=tag(serve log tag)  $2=MAXTOK  $3=cell tag
+  # --model 을 반드시 넘긴다. 게이트의 기본값은 7B 라서, 8B 실행에서 이것을 빼면
+  # G0.2(model_path 확인)가 무조건 FAIL 하고 셀이 전부 SKIP 된다 [측정 2026-08-06].
   python "$REPO/scripts/fit_gate_yunuikang.py" \
     --backend "http://127.0.0.1:$BP" --log "$OUT/serve_$1.log" \
+    --model "$MODEL" --tokenizer "$MODEL" \
     --target-maxtok "$2" --ratio $RATIO --tag "gate_$3" --out "$GATEJ" \
     >> "$OUT/gate_$3.log" 2>&1
 }
