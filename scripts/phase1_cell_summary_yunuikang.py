@@ -77,6 +77,51 @@ def band(rec, slo=5.0):
     return (95.0, 100.0) if slo >= p95 else ((50.0, 95.0) if slo >= p50 else (0.0, 50.0))
 
 
+def point_goodput(profile_dir, t_start, dur, slos=(5.0, 2.0), warm=0.2):
+    """★ 점추정 goodput — 프록시 --profile 의 per-step CSV 에서 직접 계산한다.
+
+    PREREG §E. 계획 §6.4 의 P1~P4 는 전부 goodput 기준인데, 드라이버는 per-turn 을
+    저장하지 않아 Phase 1 에서는 순서통계 **구간**밖에 못 냈다(§10.6). 프록시의
+    `--profile` 은 step 단위로 남긴다:
+        program_id, step_id, prefill_s, decode_s, pause_s, tool_call_s,
+        prompt_tokens, completion_tokens, cached_tokens, kv_hit_rate, completed_at
+
+    per-step TTFT = pause_s + prefill_s
+      근거 [측정]: M-SWP §5a 가 이 하네스에서 "TTFT ~= pause + ~2s prefill, pause 지배"
+      임을 확인했다. 승격이 5초 tick 에서만 일어나므로 재개 대기(pause)가 TTFT 를 지배한다.
+
+    goodput(SLO) = Σ completion_tokens (TTFT <= SLO 인 스텝, 고정 steady 창 안)
+                   ÷ steady_wall_s
+    창은 §10.2 와 동일한 고정 규칙 [t_start + warm*dur, t_start + dur] 을 completed_at 에 적용.
+    """
+    path = os.path.join(profile_dir, "step_profiles.csv")
+    if not os.path.exists(path):
+        return None, "profile csv missing"
+    w0, w1 = t_start + warm * dur, t_start + dur
+    tot = {s: 0.0 for s in slos}
+    n_win = n_all = 0
+    try:
+        for r in csv.DictReader(open(path)):
+            n_all += 1
+            try:
+                ca = float(r["completed_at"]); ttft = float(r["pause_s"]) + float(r["prefill_s"])
+                ct = float(r["completion_tokens"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if not (w0 <= ca <= w1):
+                continue
+            n_win += 1
+            for s in slos:
+                if ttft <= s:
+                    tot[s] += ct
+    except Exception as e:
+        return None, f"profile csv unreadable: {e!r}"
+    if n_win == 0:
+        return None, f"steady 창에 스텝 0 (전체 {n_all})"
+    wall = w1 - w0
+    return {f"goodput_{s:g}s": tot[s] / wall for s in slos}, f"{n_win}/{n_all} steps in window"
+
+
 def engine_steady_tok_s(csv_path, t_start, dur, warm=0.2):
     """Fixed steady window [t_start + warm*dur, t_start + dur] over the /metrics counter."""
     if not os.path.exists(csv_path):
@@ -120,6 +165,7 @@ def main():
     ap.add_argument("--note", default="")
     ap.add_argument("--progress", required=True)
     ap.add_argument("--summary-json", required=True)  # machine-readable, for the verdict step
+    ap.add_argument("--profile-dir", default="", help="프록시 --profile-dir. 주면 점추정 goodput 계산")
     args = ap.parse_args()
 
     rec = read_driver(args.results, args.tag)
@@ -127,6 +173,8 @@ def main():
     eng, eng_note = engine_steady_tok_s(
         os.path.join(args.out_dir, f"engine_{args.tag}.csv"), args.t_start, args.dur)
     gb = band(rec)
+    gp, gp_note = (point_goodput(args.profile_dir, args.t_start, args.dur)
+                   if args.profile_dir else (None, "profile-dir 미지정"))
 
     out = {
         "tag": args.tag, "system": args.system, "fit_label": args.fit_label,
@@ -138,6 +186,9 @@ def main():
         "ttft_p50_s": (rec or {}).get("ttft_p50_s"),
         "ttft_p95_s": (rec or {}).get("ttft_p95_s"),
         "goodput_band_5s": gb,
+        "goodput_5s": (gp or {}).get("goodput_5s"),
+        "goodput_2s": (gp or {}).get("goodput_2s"),
+        "goodput_note": gp_note,
         "steady_turns": (rec or {}).get("steady_turns"),
         "steady_programs": (rec or {}).get("steady_programs"),
         "failed_programs": (rec or {}).get("failed_programs"),
@@ -178,7 +229,7 @@ def main():
             except json.JSONDecodeError:
                 continue
             if p2.get("fit_label") == args.fit_label and p2.get("system") == "TAO":
-                for k in ("ttft_p50_s", "ttft_p95_s"):
+                for k in ("ttft_p50_s", "ttft_p95_s", "goodput_5s", "goodput_2s"):
                     a, b = out.get(k), p2.get(k)
                     out[f"ratio_{k}_mori_over_tao"] = (a / b) if (a and b) else None
 
@@ -197,7 +248,7 @@ def main():
     row = (f"| {args.tag} | {args.fit_label} (fit {args.fit:.2f}) | {args.status} | "
            f"{ts(args.t_start)} | {ts(args.t_end)} | {fmt(out['driver_thr_tok_s'])} | "
            f"{fmt(out['engine_thr_tok_s'])} | {fmt(out['ttft_p50_s'])} | "
-           f"{fmt(out['ttft_p95_s'])} | {gb_s} | {ratio_s} | "
+           f"{fmt(out['ttft_p95_s'])} | {fmt(out['goodput_5s'])} | {gb_s} | {ratio_s} | "
            f"{fmt(out['waiting_evict'], 'd')} | {fmt(out['pingpong_pct'], '.0f')}% | "
            f"{fmt(out['steady_turns'], 'd')} | {args.note} |")
     with open(args.progress, "a") as f:
