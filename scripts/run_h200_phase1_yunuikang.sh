@@ -21,7 +21,7 @@ TRACE=$REPO/scratch/traces/tracelab_moriM_L64k_yunuikang.jsonl
 OUT="${OUT:-$REPO/scratch/mori/h200_phase1}"
 RES="$OUT/results_phase1.jsonl"
 SUMJ="$OUT/cell_summaries.jsonl"
-PROGRESS="${PROGRESS:-$REPO/logs/2026-08-05_H200_PHASE1_PROGRESS_yunuikang.md}"
+PROGRESS="${PROGRESS:-$OUT/progress.md}"   # 러너용 임시 로그 -> scratch(gitignore). 정식 기록은 logs/*_H200_RESULTS_*
 GATEJ="$OUT/gate_percell.jsonl"
 BP=8123; PP=9000
 C=80; RATIO=2

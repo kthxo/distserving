@@ -15,7 +15,7 @@ export MODEL="Qwen/Qwen3-8B"
 export SERVE="$REPO/scripts/_serve_sglang_8b""_tp1_h200_mori_yunuikang.sh"   # 문자열 분할: 이 파일도 패턴에 안 걸리게
 export DUR=3600                      # 60분 — 5090 앵커와 동일 (PREREG §11.1)
 export OUT="$REPO/scratch/mori/h200_phase1_8b"
-export PROGRESS="$REPO/logs/2026-08-06_H200_PHASE1_8B_PROGRESS_yunuikang.md"
+export PROGRESS="$OUT/progress_8b.md"   # scratch 아래 = git 밖. 정식 기록은 RESULTS 문서
 export VERDICT_MODE=model-confound   # rev4 해석: REPRODUCED=모델/KV밀도 · NOT=interconnect/TP
 export AFTER_F1=stop                 # Phase 1 은 2셀로 끝난다 (fit 스윕 폐기)
 
