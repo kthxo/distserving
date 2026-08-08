@@ -11,9 +11,11 @@
 # 실행:  bash scripts/run_tierc_yunuikang.sh              # C40 → C80
 #        CLIST="80" bash scripts/run_tierc_yunuikang.sh   # C80 만
 set -uo pipefail
-REPO=/home/yunuikang/yunuikang_work/distserving
-VENV=/home/yunuikang/yunuikang_work/.venv
-TRACE=/home/yunuikang/yunuikang_work/scratch/traces/tracelab_moriM_L64k_yunuikang.jsonl
+# 경로는 전부 env override 가능. REPO 기본값은 **이 스크립트 위치에서 유도**하므로
+# 박스가 바뀌어도 그대로 돈다 (goguma6 하드코딩이 이식을 막던 자리).
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+VENV="${VENV:-${VIRTUAL_ENV:-/venv/main}}"   # 활성 venv 우선, 없으면 이미지 기본 경로
+TRACE="${TRACE:-$REPO/scratch/traces/tracelab_moriM_L64k_yunuikang.jsonl}"
 MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct}"
 SERVE="${SERVE:-$REPO/scripts/_serve_sglang_7b_tp1_h200_mori_yunuikang.sh}"
 BP=8123; PP=9000
@@ -21,7 +23,7 @@ MAXTOK="${MAXTOK:-647520}"        # fit 20.00 (= Phase 2 격자와 동일)
 FIT_DEN=32376; RATIO="${RATIO:-2}"
 CLIST="${CLIST:-40 80}"
 DUR="${DUR:-1500}"; GRACE="${GRACE:-60}"; WARM="${WARM:-0.2}"
-OUT="${OUT:-/home/yunuikang/yunuikang_work/scratch/mori/tierc_h200}"
+OUT="${OUT:-$REPO/scratch/mori/tierc_h200}"
 RES=$OUT/results_tierc.jsonl
 HM="sglang:hicache_host_used_tokens,sglang:hicache_host_total_tokens,sglang:evicted_tokens_total,sglang:load_back_tokens_total,sglang:cached_tokens_total,sglang:prompt_tokens_total,sglang:generation_tokens_total"
 mkdir -p "$OUT"; touch "$RES"
@@ -40,7 +42,8 @@ kill_proxy(){ for pid in $(pgrep -f "bin/thunderagent" 2>/dev/null); do
   cl=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null); case " $cl " in *" --port $PP "*) kill "$pid";; esac; done; sleep 2; }
 trap 'kill_proxy; kill_backend' EXIT
 wait_gpu_idle(){ for i in $(seq 1 40); do
-  n=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . || echo 0)
+  # grep -c 는 0 을 "출력하면서" exit 1 이라 `|| echo 0` 이 두 줄을 만든다 → 항상 불일치.
+  n=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . ); n=${n:-0}
   [ "$n" = "0" ] && return 0; sleep 2; done; kill_backend; }
 
 boot(){ # $1=EVICT $2=TAG

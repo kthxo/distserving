@@ -311,7 +311,17 @@ def plot(aggs, outdir):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    plt.rcParams["font.family"] = "Noto Sans CJK KR"
+    # 이 인스턴스에는 Noto CJK 가 없다 — 리포지토리 동봉 NanumGothic 으로 폴백한다.
+    from matplotlib import font_manager as _fm
+    _have = {f.name for f in _fm.fontManager.ttflist}
+    if "Noto Sans CJK KR" not in _have:
+        _ttf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "NanumGothic_yunuikang.ttf")
+        if os.path.exists(_ttf):
+            _fm.fontManager.addfont(_ttf)
+            plt.rcParams["font.family"] = _fm.FontProperties(fname=_ttf).get_name()
+    else:
+        plt.rcParams["font.family"] = "Noto Sans CJK KR"
     plt.rcParams["axes.unicode_minus"] = False
     INK, MUTE, GRID = "#1A1A2E", "#6B6B7B", "#DDE1E8"
 
