@@ -19,3 +19,15 @@ if os.environ.get("SGLANG_MORI_PATCH") == "1":
     except Exception as e:  # never break interpreter startup
         import sys
         print(f"[sitecustomize] MORI patch skipped: {e!r}", file=sys.stderr)
+
+# Tier C time-decomposition instrumentation — an INDEPENDENT layer, gated by its
+# own env var so it composes with (and never replaces) the MORI patch above.
+# Applies to TA+O as well: the HiCache transfer path is shared, and TA+O runs
+# without SGLANG_MORI_PATCH, so this block must not be nested in the guard above.
+if os.environ.get("MORI_TIERC") == "1":
+    try:
+        import mori_tierc_instrument_yunuikang
+        mori_tierc_instrument_yunuikang.install()
+    except Exception as e:  # never break interpreter startup
+        import sys
+        print(f"[sitecustomize] Tier C instrument skipped: {e!r}", file=sys.stderr)
