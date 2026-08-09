@@ -307,7 +307,7 @@ def aggregate(d, tag):
 
 
 # ───────────────────────────────────────────── 그림
-def plot(aggs, outdir):
+def plot(aggs, outdir, slug="run"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -395,7 +395,9 @@ def plot(aggs, outdir):
                      f"(별도 스트림, 예산 미가산)" for a in ok)
     fig.suptitle(sub, fontsize=9.5, color=MUTE, y=1.02)
     os.makedirs(outdir, exist_ok=True)
-    p = os.path.join(outdir, "mori_tierc_budget_yunuikang.png")
+    # ★ 파일명에 소스 디렉터리를 넣는다. 고정 이름이면 다른 실험을 분석할 때마다
+    #   앞선 실험의 그림을 조용히 덮어쓴다 (실제로 스모크 그림이 5090 데이터로 덮였다).
+    p = os.path.join(outdir, f"mori_tierc_budget_{slug}_yunuikang.png")
     fig.savefig(p, dpi=200, bbox_inches="tight", facecolor="white")
     print(f"  [plot] {p}")
     return p
@@ -465,7 +467,8 @@ def main():
         if a.get("note"):
             print(f"    [주의] {a['note']}")
 
-    p = plot(aggs, args.figdir)
+    slug = os.path.basename(os.path.normpath(args.dir))
+    p = plot(aggs, args.figdir, slug)
     print(f"\n요약 JSON: {out_json}")
     if p:
         print(f"그림:      {p}")
