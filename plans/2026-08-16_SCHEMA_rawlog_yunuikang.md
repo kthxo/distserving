@@ -210,5 +210,5 @@
 2. **세션 계층**: raw trace에 "세션 > program" 경계 실재 여부 → GPU 서버 코드 조사 결과 대기(§3 필드 `program_idx` 전제).
 3. **Parquet 파티셔닝**: requests/kv_events는 `session_idx` 또는 시간 bin으로 row-group flush.
 4. **계측 격리**: 로거는 원본·baseline 경로 **0-diff**(MORI_TIERC 규약 계승) — 신규 `scheduler/mori_rawlog_yunuikang.py`.
-5. **context-length**: 남은 세션에 turn input > 71,680(YaRN)이 있으면 서빙 불가 → 그런 세션 존재 여부는 §3 필터 후 프리처리 로그로 확인(트렁케이션은 이 설계 범위 밖).
+5. **context-length**: 원본 per-turn median 124k > context 71,680 → windowing 필수. 베이스를 Track M(L=64k)으로 잡아 해결(turn input ≤65,536). windowing은 **chunk 단위(rolling 금지)** — cache 오염 방지. `context_truncate` 이벤트로 driver ctx-cap trim 추적.
 ```

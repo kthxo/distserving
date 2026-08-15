@@ -9,6 +9,7 @@
 > - `logs/2026-08-08_5090-vs-H200_ENV_DIFF_yunuikang.md` — 통제/미통제 축 카탈로그 · 데이터셋·드라이버·엔진 통제 규약
 > - `logs/2026-08-08_H200_ANALYSIS_yunuikang.md` §6.3 — 다음 단계 후보 · n=1 한계
 > - `plans/2026-07-30_PLAN_mori-on-thunderagent-goguma6_yunuikang.md` — MORI 3-tier·ι 정의·serve/driver 구조
+> - `logs/2026-08-15_tracelab_trace_structure_yunuikang.md` — **트레이스 조사**: session=program 2단(program_id 없음)·KV는 세션 내 턴간 누적·driver 이미 세션 closed-loop·timestamp 없음·30분드롭=세션9.5%/시간46%·per-turn median 32,376
 >
 > **원칙: baseline(SMG/TA/TA+O) 경로·원본 trace·기존 스크립트 무수정. 신규 파일 전부 `*_yunuikang`. GPU는 각 서버 지정 인덱스만. MORI 단독·TP1 단일 GPU. 본 턴은 계획 생성 외 무수정.**
 
@@ -81,17 +82,18 @@
 
 ## 3. 트레이스 전처리 — 세션째 제거 (신규, Track M과 다른 철학)
 
-Track M은 turn-window 슬라이스 + human-wait 주입 + 300s cap으로 **가공**했다. 이번엔 **가공 없이 세션째 제거**해 남는 세션을 raw하게 둔다.
+Track M의 windowing·cap은 **유지**(context 물리한계상 필수)하되, 추가로 30분↑ 세션을 드롭한다. fit32k식 "컨텍스트 초과 세션 드롭"(selection bias)은 하지 않는다.
 
 ```
-원본 TraceLab full
- → (필터) 세션 내 어떤 program이라도 wall ≥ 30분 → 그 세션 전체 제거
-          (human-wait가 긴 program은 wall이 길어 이 규칙에 자동 포함 — 별도 임계 불필요)
- → 세션 내부는 자르지 않음 (program→program KV 누적 보존)
- → 산출: tracelab_rawfilt_yunuikang.jsonl + 세션별 (program 경계·누적 ctx) 메타
+베이스 = Track M primary (turn-window L=64k · tool cap 300s · s_ctx median 32,376)
+   ※ 원본 full은 per-turn input median 124k → 모델 context 71,680 초과 → windowing 물리적 필수
+     (human-wait는 Track M 유지 = idleness 연구대상, 30분↑만 아래서 드롭)
+ → (필터) 세션 wall ≥ 30분(1800s)인 세션 전체 제거   [session=program 1:1]
+ → 세션 내부는 자르지 않음 (세션 내 턴 간 KV 누적 보존)
+ → 산출: tracelab_rawfilt_yunuikang.jsonl + 필터 통계(보존율·s_ctx·wall 분포)
 ```
 
-- **세션이 KV-locality 단위**: 세션 안에서 이전 program의 context가 다음 program KV로 누적된다(김태현님 지시). 그래서 내부를 자르면 구조가 깨진다 → **세션째 드롭**.
+- **세션이 KV-locality 단위**: 세션 안에서 턴을 거치며 context가 연속 누적된다(트레이스 실측: input_tokens 단조 증가). 내부를 자르면 구조가 깨진다 → **세션째 드롭**.
 - 프리처리 산출 통계를 로그로 남긴다: 제거 전/후 세션·program·turn 수, 보존율, 세션 peak 누적 ctx 분포, human-wait 분포.
 - 신규 스크립트 `scripts/prep_tracelab_rawfilt_yunuikang.py` (원본 trace·기존 prep 무수정).
 
@@ -119,7 +121,7 @@ r = 2  → CPU tier(host) = 2 · C_gpu
 
 → H200 Phase2(C 20/40/80 @ fit20, oversub 1/2/4×)와 같은 논리를 **각 GPU의 자연 fit 상대값**으로 재현.
 
-### 4.1 자연 fit 개략치 (7B · s_ctx≈50k 가정 · **기동 시 확정**)
+### 4.1 자연 fit 개략치 (7B · s_ctx≈32,376[측정] · **기동 시 필터 후 재확정**)
 
 | GPU (TP1·7B) | C_gpu 자연 KV풀 | fit | C = fit / 2fit / 4fit | CPU tier(r2) DRAM | DRAM 여유 |
 |---|---|---|---|---|---|
@@ -144,63 +146,39 @@ r = 2  → CPU tier(host) = 2 · C_gpu
 = 6 runs
 ```
 
-### 5.2 세션-단위 드라이버 (신규)
+### 5.2 드라이버 — concurrency는 이미 세션 단위 (변경 불필요)
 
-현재 `mori_replay_driver`는 C 워커가 **program** 순환. 세션 단위로 바꾼다:
-- 동시 슬롯 C개 = **세션 C개** 동시 진행
-- 세션 내부 program들은 **순차 실행**(이전 program KV 누적) → 세션이 스티키 배치 단위
-- 세션 완주 → 슬롯에 새 세션 투입(무한 순환 + 사이클 셔플, 고유 세션 커버리지)
-- 신규 파일 `scripts/mori_replay_driver_session_yunuikang.py` (기존 driver 무수정)
+트레이스 조사로 확인: **기존 `mori_replay_driver`가 이미 세션 단위 closed-loop**이다 — C개 영속 워커가 각각 세션 하나를 끝까지(턴 순차) 돌린 뒤 다음 세션을 뽑는다. 트레이스는 session=program 1:1, KV는 세션 내 **턴 간** 연속 누적. → **concurrency 단위 변경 불필요.**
+
+신규로 필요한 것은 concurrency가 아니라:
+- (a) 30분-드롭 필터 trace (§3)
+- (b) raw 상시로깅 훅 (§6)
+- (c) `deadline_grace_s` 상향/해제 — 30분 드롭으로 세션이 이미 ≤30분이므로 즉시취소(현재 45s) 방지
+- driver의 `program_id = session#cycle`은 **세션 replay 인스턴스** id일 뿐(세션 내 하위 program 아님)
 
 ### 5.3 런 길이 · steady state
 
-- warmup 앞 20% 제외. steady 판정은 **offline**(steplog throughput·KV-usage plateau 자동탐지).
-- 길이 목표: steady 도달 + **window 분할용 충분 표본**(steady 구간에서 완주 세션 ≥ 수십, step ≥ 수만). GPU당 3런 → **각 서버 ~하루 안**.
-- n=1(런 자체는 1회) — 분산은 §7 window 분할로.
+- **셀당 6–8h**: warmup ~30–40min(앞 20% 제외) + 측정 창 ~5.5–7h. steady 판정은 offline(steplog throughput·KV-usage plateau).
+- **5090(goguma6)·Pro6000(nutella)는 서버가 달라 동시 실행.** 각 서버가 자기 GPU의 3셀을 순차로.
+- **서버당 3셀 × 6–8h ≈ 18–24h**, 두 서버 병행 → 전체 ~하루+.
+- 첫 셀을 캘리브레이션 겸용(warmup 길이·창 위치 민감도).
+- `deadline_grace_s` 상향/해제(§5.2c) — 30분 드롭으로 세션 ≤30분이라 완주 가능하게.
+- n=1(런 1회), 분산은 §7 window 분할.
 
 ---
 
 ## 6. ★ Raw-event 스키마 (중심 산출물 — 돌리기 전 확정 대상)
 
-**설계 원칙:** ① pre-aggregation 금지 ② 모든 stream을 `(session_id, program_id, turn_id)` + `ts_mono_ns`(단조) + `ts_wall`로 join 가능 ③ **cached / new / recompute 토큰을 발생 시점에 분리 기록**(offline 복원 불가) ④ tier 이동을 토큰수와 함께 discrete event로 → KV tier 점유를 시간축으로 재구성 가능 ⑤ 빈도가 다른 stream 분리(step log 대용량).
+**최신·확정 스키마는 별도 문서**: `plans/2026-08-16_SCHEMA_rawlog_yunuikang.md`. 6개 파일 — `run_meta.json` · `requests.jsonl` · `events.jsonl` · `kv_events.jsonl` · `snapshots.jsonl` · `gpu.jsonl`.
 
-신규 로깅 모듈 `scheduler/mori_rawlog_yunuikang.py` — 기존 MORI_TIERC monkeypatch를 상시-on 종합 로거로 확장(원본·baseline 0-diff 유지).
+핵심 규약(트레이스 조사 반영):
+- **driver 단조시계 단일**(run origin 0.0s), server값은 duration. (트레이스에 timestamp 없음 → 이게 유일 시간원)
+- join 키 `(session_idx, cycle, turn)` — **program 하위레이어 없음**(session=program 1:1). driver `program_id=session#cycle`은 세션 replay 인스턴스.
+- `cached_tokens`는 트레이스값이 아니라 **엔진 replay 시점 prefix-hit**을 로깅(트레이스 cached_tokens 미사용 확인).
+- **`context_truncate` 이벤트 로깅** — driver `--ctx-cap` trim이 실제로 자르므로 재생 KV 곡선 추적에 필요.
+- recompute는 step log 없이 `cached_tokens`+`kv_tokens_end` 궤적 + kv_events(evict/reload)로 offline 재구성, snapshot 누적카운터로 교차검증.
 
-### 6.1 스트림 ①  `run_meta.json` (run당 1회)
-
-HW(서버·GPU·TP·NUMA·DRAM·드라이버/CUDA) · 엔진/모델(SGLang ver·7B·KV밀도·context-length·YaRN) · **자연 KV풀·fit·r·오프로딩 config** · router=mori·MORI 파라미터(k·tick·iota·reload_bw·min_dwell) · trace 필터 파라미터(30분 program-wall)·s_ctx·C(세션) · **boot assert**(GPU풀·host tier·fit 정확 일치) · wall/mono epoch.
-
-### 6.2 스트림 ②  `events.jsonl` (lifecycle · append-only)
-
-공통: `ts_mono_ns, ts_wall, event_type, session_id, program_id, turn_id, gpu_id`
-
-| event_type | payload |
-|---|---|
-| SESSION_ADMIT / SESSION_COMPLETE | program_count · accum_ctx_tokens(start/end) |
-| PROGRAM_START / PROGRAM_END | ctx_tokens_at_start · num_turns |
-| TURN_ARRIVE / TURN_ADMIT | input_tokens · queue_wait_s |
-| PREFILL_START | **new_tokens · cached_tokens · recompute_tokens** |
-| FIRST_TOKEN | ttft_s |
-| TURN_COMPLETE | output_tokens · prefill_s · decode_s · pause_s · prefix_hit_tokens · recompute_tokens · gpu_id |
-| TOOLCALL_START / TOOLCALL_END | duration_s · tool_type(human_wait/real) · is_longtail |
-| TIER_TICK (MORI) | per active program: iota · tier(GPU/CPU/Waiting) · rank |
-| TIER_MOVE (MORI) | from_tier→to_tier · tokens · reason |
-| KV_EVICT / KV_RELOAD | program_id · tokens · tier · reload_s |
-| PAUSE / RESUME | program_id · reason |
-
-### 6.3 스트림 ③  `steps.parquet` (엔진 forward step마다 — 가장 raw한 GPU-time 단위)
-
-`ts_mono_ns · step_idx · gpu_id · batch_size · num_prefill_tokens · prefill_new_tokens · prefill_recompute_tokens · num_decode_tokens · step_latency_s · kv_used_tokens · kv_total · kv_evictable · radix_cache_tokens · cum_cache_hit · cum_cache_miss`
-
-→ 이 stream 하나로 offline에서 **decode/prefill-new/recompute/idle 시간예산 + steady-state 판정 + throughput 시계열** 전부 도출. (하루치 수백만 row → parquet + 회전.)
-
-### 6.4 스트림 ④  `engine_snapshot.jsonl` (주기 ~1s)
-
-`ts · num_running · num_waiting · num_paused · kv_usage_frac · radix_size · gen_throughput_inst · tier_occupancy(GPU/CPU/Waiting 프로그램수) · host_tier_bytes · 누적카운터(generation_tokens_total · prompt_tokens_total · cached_tokens_total · local_compute)`
-
-### 6.5 스트림 ⑤  `gpu.jsonl` (nvidia-smi 샘플러 · GPU별 ~200ms–1s)
-
-`ts · gpu_id · util% · mem_used_mib · power_w · sm_clock_mhz · mem_clock_mhz`
+신규 로깅 모듈 `scheduler/mori_rawlog_yunuikang.py` — 기존 MORI_TIERC monkeypatch를 상시-on 로거로 확장(원본·baseline 0-diff 유지).
 
 ---
 
@@ -213,7 +191,7 @@ HW(서버·GPU·TP·NUMA·DRAM·드라이버/CUDA) · 엔진/모델(SGLang ver·
 | **GPU 시간예산** | ③ | decode/prefill-new/recompute/idle 분해 (C별 추세) |
 | goodput@**임의 SLO** · TTFT p50/p95 | ②③ | 사후 SLO 대입 |
 | prefix hit · recompute율 · reload량 | ②④ | 누적/이벤트 재집계 |
-| **세션·program별 분해** | ② | context 누적 단위가 세션이므로 |
+| **세션(session#cycle)별 분해** | ② | context 누적 단위가 세션이므로 |
 | MORI **tier 동역학** | ② | 점유 시계열 · move rate · ι 분포 |
 | 5090 vs Pro6000 | 전체 | 동일 파이프라인 비교(둘 다 TP1) |
 
@@ -225,9 +203,9 @@ HW(서버·GPU·TP·NUMA·DRAM·드라이버/CUDA) · 엔진/모델(SGLang ver·
 |---|---|---|
 | 1 | **program-wall cut 임계** | ✅ **결정: 30분 일괄.** human-wait 세션은 wall이 길어 자동 포함(별도 T_hw 없음) |
 | 2 | **s_ctx 정의** | ✅ **제안 채택: per-turn 누적 context(input_tokens) median.** 세션 peak 분포 병기, 필터 후 재계산 |
-| 3 | **세션 계층 확인** | raw trace에 "세션 > program" 경계가 실재하는지 — 없으면 세션≡program 처리 or 재생성 → **GPU 서버 코드 조사 요청** |
+| 3 | **세션 계층** | ✅ **확정: session=program 2단**(트레이스 조사). driver가 이미 세션 closed-loop → concurrency 변경 불필요 |
 | 4 | **Pro6000 `max-num-seqs`** | ✅ **결정: 상향.** C=4fit(~166)이 상한에 안 걸리게(캡 아님, in-flight 상한만) |
-| 5 | **런 길이** | GPU당 3런, steady + window 충분수 기준으로 결정(~하루/서버) |
+| 5 | **런 길이** | ✅ **셀당 6–8h**(warmup ~30–40min + 측정 ~5.5–7h). 5090·Pro6000 서버 병행. 서버당 3셀 ≈ 18–24h · deadline_grace 상향 |
 | 6 | **reload_bw µbench** | PCIe 마이크로벤치로 보정(placeholder 8.0e9 대체) |
 | 7 | **step-log 회전** | parquet + 크기/시간 회전 정책 |
 
