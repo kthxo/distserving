@@ -34,7 +34,7 @@ MORI는 ThunderAgent 스케줄러에 (1) 프로그램별 상대 idleness ι = T_
 - **`BackendState.update_shared_tokens()`는 아무도 호출하지 않음** (`grep` 결과 정의부 1곳뿐). 즉 `shared_tokens`는 영구히 0이고, `remaining_capacity()`/`capacity_overflow()`는 **prefix 공유를 전혀 반영하지 않는다.** 기존 tr 베이스라인의 실제 동작이므로 **고치지 않는다**(베이스라인 무수정 원칙). 단 MORI의 CPU tier 용량 회계도 같은 규약(공유 무시)을 써야 TA+O와 공정 비교가 됨 → §B-3 불변식에 명시.
 - `--router`의 `choices=["default","tr"]` (`__main__.py:16`) → `"mori"` 추가 필요.
 - `app.py`는 `router_mode == "tr"` 로만 `scheduling_enabled`를 정함(`app.py:242`). MORI는 여기 분기 추가가 유일한 app.py 수정.
-- 기존 replay driver(`trace_replay_driver_yunuikang.py`)는 **run-to-completion(모든 프로그램 완주)** 방식. MORI 논문은 **고정 1시간 창** 방식. 이 차이가 §D의 소요시간 문제를 통째로 해결한다(기존 로그의 "128k는 최장세션 E2E 13.7 h가 점당 floor" 문제가 사라짐).
+- 기존 replay driver(`trace_replay_driver_yunuikang.py`)의 종료 조건은 **고정 프로그램 수**다 — `asyncio.gather(*[run_program(...) for progs])` over `--num-programs`(`:349-357`). `--duration`/deadline/`time_limit` 인자도, 러너 셸의 `timeout` 래퍼도 **어디에도 없다**(세 드라이버 + 4개 러너 grep 확인). `wall`은 부과값이 아니라 측정값. → 기존 로그의 "128k는 최장세션 E2E 13.7 h가 점당 floor"가 정확히 이 구조 때문. **단, 슬롯 동작 자체는 이미 MORI와 동일**하다(§D-1 대조표) — 다른 것은 종료 조건과 집계 창 두 가지뿐이므로 신규 드라이버는 재작성이 아니라 **3가지 추가**로 끝난다.
 - 기존 driver는 `--stream`으로 turn별 `ttft_s`를 기록하지만 **summary에 TTFT 집계가 없음**. MORI 3대 지표 중 하나이므로 신규 driver에 집계 추가 필요.
 - `--tool-scale`은 expC driver에만 있음. **MORI 평가에서는 tool 시간 스케일링 금지**(idleness 구조 자체를 왜곡).
 
@@ -422,10 +422,25 @@ DP=1이므로 서브에이전트의 multi-replica 함의(논문 §6.2.2 churn)�
 
 논문 §6.1: "Each concurrency slot is a closed-loop client that replays a single Claude Code trace... Once a trace completes, the client immediately starts a new one from the trace corpus. **All experiments run for a fixed duration of one hour**, and we report metrics aggregated over the entire run."
 
-기존 하네스는 run-to-completion이라 **최장 세션 E2E가 셀당 시간 하한**이 된다(2026-07-24 로그: 128k는 셀당 13.7 h → 서브샘플조차 329 h). 고정 시간창으로 바꾸면 이 문제가 **소멸**한다. 신규 드라이버 `scripts/mori_replay_driver_yunuikang.py`:
+**★ 기존 드라이버와의 정확한 차이 (코드 확인 결과 — 생각보다 작다)**:
 
-- 기존 `trace_replay_driver_yunuikang.py`의 토큰 매칭·페이로드 생성·메트릭 스크레이핑 기계를 그대로 이식(원본 무수정, import 또는 복제).
-- 변경점: (1) `--duration-s`(기본 1200) 고정 창, 슬롯이 세션 완주 시 코퍼스에서 **다음 세션을 즉시 시작**, (2) warmup 구간(기본 앞 20%) 제외 후 집계, (3) `--stream` 항상 on, (4) **TTFT 집계 추가**(mean/p50/p95).
+| 항목 | 기존 `trace_replay_driver_yunuikang.py` | MORI 논문 §6.1 | 판정 |
+|------|------------------------------------------|----------------|------|
+| 동시성 모델 | `asyncio.Semaphore(C)` closed-loop (`:337,350`) | closed-loop slot | ✅ 동일 |
+| 슬롯 재사용 | 프로그램 완주 → 세마포어 해제 → 대기 중 다음 프로그램 즉시 시작 | "Once a trace completes, the client immediately starts a new one from the trace corpus" | ✅ **동일** |
+| 툴 갭 재현 | `await asyncio.sleep(tool_duration_s)` (`:301`) | "sleeping for the recorded duration" | ✅ 동일 |
+| 프로그램 단위 | 세션 1개 = program_id 1개, 끝나면 `/programs/release` | 동일 | ✅ 동일 |
+| **종료 조건** | **완주 프로그램 수** — `gather` over `--num-programs` (`:349-357`). deadline 인자 없음, 러너에 `timeout` 래퍼 없음 | **고정 1시간** | ❌ **여기만 다름** |
+| **집계 창** | 완주 **순서** 기준 앞뒤 `--warmup-frac`(0.1) 절단, `steady_wall = max(finished_at) − min(finished_at)` (`:376-413`) — 파생 창이지 벽시계 창이 아님 | 전 구간 시간 집계 | ❌ 다름 |
+| TTFT | turn별 `ttft_s`는 기록하나 **summary 집계 없음** (`:275`) | mean TTFT 보고 | ❌ 없음 |
+
+즉 문제는 **종료 조건 하나**다. run-to-completion이라 **최장 세션 E2E가 셀당 시간 하한**이 된다(2026-07-24 로그: 128k는 셀당 13.7 h → 서브샘플조차 329 h). 부수적으로, 끝물에 프로그램이 소진되며 실효 동시성이 C 아래로 내려가는 **드레인 구간 편향**이 생기는데, 순서 기준 트리밍은 이를 부분적으로만 걷어낸다(느린 heavy-tail 세션이 정의상 뒤쪽에 몰려 있어 뒤 10% 절단이 그 세션들을 통째로 버릴 수 있음).
+
+⇒ 신규 드라이버 `scripts/mori_replay_driver_yunuikang.py`는 **재작성이 아니라 3가지 추가**다(원본 무수정, 복제 후 수정):
+
+1. `--duration-s`(기본 1200) — `run_program` 루프 진입 시 deadline 체크, 초과 시 슬롯 종료. 코퍼스 소진 방지를 위해 `build_program_list`를 **무한 순환 제너레이터**로 교체(현재도 `run_idx` 접미사로 세션 재사용을 하므로 로직 그대로 확장).
+2. **시간 기준 집계 창** — `--warmup-frac`(순서 기준) 대신 `[t0 + 0.2·D, t0 + D]` 벽시계 창 안에서 **완료된 턴 단위**로 집계(프로그램 완주 단위가 아니라). 이러면 창 끝에 걸친 미완 프로그램이 결과를 왜곡하지 않는다.
+3. **TTFT 집계 추가**(mean/p50/p95) + `--stream` 강제 on.
 - 보고 지표(논문 §6.2와 1:1):
   - `output_throughput_tok_s` = Σcompletion_tokens / steady_wall
   - `step_throughput_req_s` = Σcompleted turns / steady_wall
